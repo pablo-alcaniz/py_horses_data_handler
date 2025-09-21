@@ -1,5 +1,4 @@
 import os
-import glob
 
 
 class HorsesDataHandler():
@@ -7,10 +6,11 @@ class HorsesDataHandler():
     def __init__(self):
         print(">>> Data handler started...")
     
-    def convert_hsol2hdf(self, SOLVER_PATH:str, SOL_PATH: str, MESH_PATH: str):
+    def convert_hsol2hdf(self, SOLVER_PATH:str, SOL_PATH: str, MESH_PATH: str, HDF_PATH:str = None, output_parameters:str = None, log:bool = False):
         ########################################################################
         ##  Function to convert .hsol binaries to .hdf
         ########################################################################
+        
         
         
         ## DIR checks and manipilation:
@@ -29,11 +29,33 @@ class HorsesDataHandler():
             raise Exception("No .hsol found.")
         else:
             print(">>> Nº of .hsol files: ",len(hsol_files))
-            
+            print(hsol_files)
         # mesh file:
         mesh_files = [file for file in os.listdir(MESH_PATH) if file.endswith(f".hmesh")] #makes a list of hmesh files
         
         if not mesh_files: 
             raise Exception("No .hmesh found.")
         else:
-            print(">>> Nº of .hmesh files: ",len(mesh_files))       
+            print(">>> Nº of .hmesh files: ",len(mesh_files))
+            print(mesh_files)
+            
+        # Save dir for hdf file:
+        if HDF_PATH is None: 
+            HDF_PATH = SOL_PATH
+        
+        # Parameters config:
+        if output_parameters is None:
+            output_parameters = "--output-mode=FE --output-variables=rho,u,v,w,p,T,Mach --output-type=vtkhdf"
+        
+        # shell log config:
+        if log:
+            log_control = ""
+        else:
+            log_control = "> /dev/null 2>&1"
+            
+        
+        ## File generation:
+        os.system(str(horses2plt_ABS_DIR+" "+os.path.join(SOL_PATH,"*.hsol")+" "+os.path.join(MESH_PATH,mesh_files[0])+" "+output_parameters)+" "+log_control)
+        
+        # Move files to the desired location 
+        os.system(f"mv {SOL_PATH}/*.hdf {HDF_PATH}/")
