@@ -19,8 +19,6 @@ packages = ["py_horses_data_handler"]
 [tool.hatch.build.targets.sdist]
 include = [
     "/py_horses_data_handler",
-    "/tests",
-    "/docs",
     "README.md",
-    "LICENSE",
+    "LICENSE"
 ]
