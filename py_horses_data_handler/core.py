@@ -3,10 +3,10 @@ import os
 
 class HorsesDataHandler():
     
-    def __init__(self):
+    def __init__(self): 
         print(">>> Data handler started...")
     
-    def convert_hsol2hdf(self, SOLVER_PATH:str, SOL_PATH: str, MESH_PATH: str, HDF_PATH:str = None, output_parameters:str = None, log:bool = False):
+    def convert_hsol2hdf(self, SOLVER_PATH:str, SOL_PATH: str, MESH_PATH: str, HDF_PATH:str = "", output_parameters:str = "", log:bool = False):
         ########################################################################
         ##  Function to convert .hsol binaries to .hdf
         ########################################################################
@@ -38,11 +38,11 @@ class HorsesDataHandler():
             print(">>> Nº of .hmesh files: ",len(mesh_files))
             
         # Save dir for hdf file:
-        if HDF_PATH is None: 
+        if HDF_PATH is "": 
             HDF_PATH = SOL_PATH
         
         # Parameters config:
-        if output_parameters is None:
+        if output_parameters is "":
             output_parameters = "--output-mode=FE --output-variables=rho,u,v,w,p,T,Mach --output-type=vtkhdf"
         
         # shell log config:
@@ -59,3 +59,4 @@ class HorsesDataHandler():
         
         # Move files to the desired location 
         os.system(f"mv {SOL_PATH}/*.hdf {HDF_PATH}/")
+        
