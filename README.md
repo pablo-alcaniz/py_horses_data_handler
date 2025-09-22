@@ -40,8 +40,9 @@ convert_hsol2hdf(SOLVER_PATH:str, SOL_PATH: str, MESH_PATH: str, HDF_PATH:str = 
 - Returns:
     - ```None```
 
-[1] The default directory of the ```.hdf``` is ```SOL_PATH```
-[2] The default ```output_parametres``` are ```"--output-mode=FE --output-variables=rho,u,v,w,p,T,Mach --output-type=vtkhdf"```
+[1] The default directory of the ```.hdf``` is ```SOL_PATH```.
+
+[2] The default ```output_parametres``` are ```"--output-mode=FE --output-variables=rho,u,v,w,p,T,Mach --output-type=vtkhdf"```.
 
 Basic use:
 ```python
