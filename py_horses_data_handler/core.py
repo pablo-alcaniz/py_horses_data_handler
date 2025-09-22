@@ -77,6 +77,24 @@ class HorsesDataHandler():
             print(">>> Data size:", float(size/1E6), "MB")
         else:
             print(">>> Data size:", float(size/1E9), "GB")
-            
+        
 
+    def get_sizes(self, PATH: str, EXTENSION: str = ".hdf") -> None:
+        """
+        Get the size of all files (of a certain extension) in a certain directory
+
+        Args:
+            PATH (str): Path to examine.
+            EXTENSION (str, optional): Extension of the files to search. Defaults to ".hdf".
+        """
+        
+        files: list[str] = [file for file in os.listdir(PATH) if file.endswith(EXTENSION)]
+        size: int = 0
+        for _file_ in files:
+            current_file: int = os.path.getsize(os.path.join(PATH,_file_))
+            size = size + current_file
+        if size < 1E9:
+            print(">>> Data size:", float(size/1E6), "MB")
+        else:
+            print(">>> Data size:", float(size/1E9), "GB")
             
