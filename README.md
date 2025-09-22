@@ -59,3 +59,16 @@ hdf_path = "..."
 
 data_handler.convert_hsol2hdf(solver_path, sol_path, sol_mesh, hdf_path)
 ```
+
+### 2. get_sizes
+
+Get the size of all files (of a certain extension) in a certain directory.
+
+```python
+get_sizes(PATH: str, EXTENSION: str = ".hdf") -> None
+```
+- Args:
+    - ```PATH (str)```: Path to examine.
+    - ```EXTENSION (str, optional)```: Extension of the files to search. Defaults to ".hdf".
+- Returns:
+    - ```None```
