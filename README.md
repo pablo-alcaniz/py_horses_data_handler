@@ -38,7 +38,7 @@ convert_hsol2hdf(SOLVER_PATH:str, SOL_PATH: str, MESH_PATH: str, HDF_PATH:str = 
     - ```output_parameters (str, optional)```: Flags for the horses2plt utility. Defaults to ""^[2].
     - ```log (bool, optional)```: Activates the stdout of horses2plt. Defaults to False.
 - Returns:
-    - ```None
+    - ```None```
 
 [1] The default directory of the ```.hdf``` is ```SOL_PATH```
 [2] The default ```output_parametres``` are ```"--output-mode=FE --output-variables=rho,u,v,w,p,T,Mach --output-type=vtkhdf"```
