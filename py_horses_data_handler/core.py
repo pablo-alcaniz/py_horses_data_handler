@@ -12,7 +12,6 @@ class HorsesDataHandler():
         ########################################################################
         
         
-        
         ## DIR checks and manipilation:
         
         # horses2plt:
@@ -29,15 +28,14 @@ class HorsesDataHandler():
             raise Exception("No .hsol found.")
         else:
             print(">>> Nº of .hsol files: ",len(hsol_files))
-            print(hsol_files)
-        # mesh file:
+            
+        # mesh files:
         mesh_files = [file for file in os.listdir(MESH_PATH) if file.endswith(f".hmesh")] #makes a list of hmesh files
         
         if not mesh_files: 
             raise Exception("No .hmesh found.")
         else:
             print(">>> Nº of .hmesh files: ",len(mesh_files))
-            print(mesh_files)
             
         # Save dir for hdf file:
         if HDF_PATH is None: 
@@ -55,7 +53,9 @@ class HorsesDataHandler():
             
         
         ## File generation:
-        os.system(str(horses2plt_ABS_DIR+" "+os.path.join(SOL_PATH,"*.hsol")+" "+os.path.join(MESH_PATH,mesh_files[0])+" "+output_parameters)+" "+log_control)
+        
+        os.system(str(horses2plt_ABS_DIR+" "+os.path.join(SOL_PATH,"*.hsol")+" "+
+                      os.path.join(MESH_PATH,mesh_files[0])+" "+output_parameters)+" "+log_control)
         
         # Move files to the desired location 
         os.system(f"mv {SOL_PATH}/*.hdf {HDF_PATH}/")
