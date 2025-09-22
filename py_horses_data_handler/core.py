@@ -1,4 +1,5 @@
 import os
+import h5py
 
 
 
@@ -97,4 +98,25 @@ class HorsesDataHandler():
             print(">>> Data size:", float(size/1E6), "MB")
         else:
             print(">>> Data size:", float(size/1E9), "GB")
-            
+    
+    def explore_hdf5_structure(self, filepath: str) -> None:
+        """
+        Funcion to see the basic data configuration in a .hdf file
+
+        Args:
+            filepath (str): Explicit path of the file to inspect
+        """
+        
+        def print_structure(name, obj) -> None:
+            indent = "     " * name.count('/')
+            if isinstance(obj, h5py.Dataset):
+                print(f"{indent}{name}: Dataset {obj.shape} {obj.dtype}")
+            elif isinstance(obj, h5py.Group):
+                print(f"{indent}{name}: Group")
+        
+        print(f"File structure: {filepath}")
+        print("-" * 50)
+        
+        with h5py.File(filepath, 'r') as f:
+            f.visititems(print_structure)
+        print("-" * 50)
