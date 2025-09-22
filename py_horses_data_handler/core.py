@@ -23,14 +23,14 @@ class HorsesDataHandler():
         
         ## DIR checks and manipilation:
         # horses2plt:
-        horses2plt_RELATIVE_DIR = "Solver/bin/horses2plt"
-        horses2plt_ABS_DIR = os.path.join(SOLVER_PATH,horses2plt_RELATIVE_DIR)
+        horses2plt_RELATIVE_DIR: str = "Solver/bin/horses2plt"
+        horses2plt_ABS_DIR: str = os.path.join(SOLVER_PATH,horses2plt_RELATIVE_DIR)
         
         if not os.path.isfile(horses2plt_ABS_DIR): #check if horses2plt exists in the directory provided by user
             raise Exception("The horses2plt utility is not found.")
 
         # solution files:
-        hsol_files = [file for file in os.listdir(SOL_PATH) if file.endswith(f".hsol")] #makes a list of hsol files
+        hsol_files: list[str] = [file for file in os.listdir(SOL_PATH) if file.endswith(f".hsol")] #makes a list of hsol files
         
         if not hsol_files: 
             raise Exception("No .hsol found.")
@@ -38,7 +38,7 @@ class HorsesDataHandler():
             print(">>> Nº of .hsol files: ",len(hsol_files))
             
         # mesh files:
-        mesh_files = [file for file in os.listdir(MESH_PATH) if file.endswith(f".hmesh")] #makes a list of hmesh files
+        mesh_files: list[str] = [file for file in os.listdir(MESH_PATH) if file.endswith(f".hmesh")] #makes a list of hmesh files
         
         if not mesh_files: 
             raise Exception("No .hmesh found.")
@@ -67,3 +67,16 @@ class HorsesDataHandler():
         # Move files to the desired location 
         os.system(f"mv {SOL_PATH}/*.hdf {HDF_PATH}/")
 
+        # Size functionality
+        hdf_files: list[str] = [file for file in os.listdir(HDF_PATH) if file.endswith(f".hdf")]
+        size: int = 0
+        for file in hdf_files:
+            current_file: int = os.path.getsize(os.path.join(HDF_PATH,file))
+            size = size + current_file
+        if size < 1000:
+            print(">>> Data size:", float(size/1E6), "MB")
+        else:
+            print(">>> Data size:", float(size/1E9), "GB")
+            
+
+            
