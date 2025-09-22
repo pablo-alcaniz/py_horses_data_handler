@@ -1,19 +1,27 @@
 import os
 
 
+
 class HorsesDataHandler():
     
-    def __init__(self): 
+    def __init__(self) -> None: 
         print(">>> Data handler started...")
     
+    
     def convert_hsol2hdf(self, SOLVER_PATH:str, SOL_PATH: str, MESH_PATH: str, HDF_PATH:str = "", output_parameters:str = "", log:bool = False):
-        ########################################################################
-        ##  Function to convert .hsol binaries to .hdf
-        ########################################################################
-        
+        """
+        Function to convert .hsol binaries to .hdf with horses2ply utility.
+
+        Args:
+            SOLVER_PATH (str): Path of a HORSES3D valid installation (make sure to compile the solver with, at least, the HDF flag activated).
+            SOL_PATH (str): Path of the .hsol files.
+            MESH_PATH (str): Path of the .hmesh file.
+            HDF_PATH (str, optional): Path where you want your .hdf files at. Defaults to "".
+            output_parameters (str, optional): Flags for the horses2plt utility. Defaults to "".
+            log (bool, optional): Activates the stdout of horses2plt. Defaults to False.
+        """
         
         ## DIR checks and manipilation:
-        
         # horses2plt:
         horses2plt_RELATIVE_DIR = "Solver/bin/horses2plt"
         horses2plt_ABS_DIR = os.path.join(SOLVER_PATH,horses2plt_RELATIVE_DIR)
@@ -53,10 +61,10 @@ class HorsesDataHandler():
             
         
         ## File generation:
-        
         os.system(str(horses2plt_ABS_DIR+" "+os.path.join(SOL_PATH,"*.hsol")+" "+
                       os.path.join(MESH_PATH,mesh_files[0])+" "+output_parameters)+" "+log_control)
         
         # Move files to the desired location 
         os.system(f"mv {SOL_PATH}/*.hdf {HDF_PATH}/")
         
+
