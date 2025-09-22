@@ -9,6 +9,7 @@ Handle the solution data provided by HORSES3D CFD solver.
 2. Install the lib in the desired project with you env manager (i.e. uv/pip):
 
     ```$ uv add [lib installation directory]```
+    
     or
 
     ```$ pip install -e [lib installation directory]```
