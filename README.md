@@ -3,13 +3,14 @@ Handle the solution data provided by HORSES3D CFD solver.
 
 ## 1. Installation:
 
-1. Make a local copy of the lib
+1. Make a local copy of the lib:
 
     ```$ git clone https://github.com/pablo-alcaniz/py_horses_data_handler.git ```
 2. Install the lib in the desired project with you env manager (i.e. uv/pip):
 
     ```$ uv add [lib installation directory]```
     or
+
     ```$ pip install -e [lib installation directory]```
 
 ## 2. Basic configuration:
