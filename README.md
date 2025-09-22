@@ -3,12 +3,14 @@ Handle the solution data provided by HORSES3D CFD solver.
 
 ## 1. Installation:
 
-1. Make a local copy of the lib:
-```$ git clone https://github.com/pablo-alcaniz/py_horses_data_handler.git ```
+1. Make a local copy of the lib
+
+    ```$ git clone https://github.com/pablo-alcaniz/py_horses_data_handler.git ```
 2. Install the lib in the desired project with you env manager (i.e. uv/pip):
-```$ uv add [lib installation directory]```
-or
-```$ pip install -e [lib installation directory]```
+
+    ```$ uv add [lib installation directory]```
+    or
+    ```$ pip install -e [lib installation directory]```
 
 ## 2. Basic configuration:
 The first step is to import the ```HorsesDataHandler``` class:
@@ -51,7 +53,7 @@ data_handler = HorsesDataHandler()
 solver_path = "..."
 sol_path = "..."
 sol_mesh = "..."
-hsd_path = "..."
+hdf_path = "..."
 
-data_handler.convert_hsol2hdf(solver_path, sol_path, sol_mesh, hsd_path)
+data_handler.convert_hsol2hdf(solver_path, sol_path, sol_mesh, hdf_path)
 ```
