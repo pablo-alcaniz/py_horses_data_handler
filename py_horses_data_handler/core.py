@@ -9,15 +9,15 @@ class HorsesDataHandler():
         print(">>> Data handler started...")
     
     
-    def convert_hsol2hdf(self, SOLVER_PATH:str, SOL_PATH: str, MESH_PATH: str, HDF_PATH:str = "", output_parameters:str = "", log:bool = False) -> None:
+    def convert_hsol2hdf(self, SOLVER_PATH:str, HSOL_PATH: str, MESH_PATH: str, OUT_FILES:str = "", output_parameters:str = "", log:bool = False) -> None:
         """
-        Function to convert .hsol binaries to .hdf with horses2ply utility.
+        Function to convert .hsol binaries to .h5 with horses2ply utility.
 
         Args:
             SOLVER_PATH (str): Path of a HORSES3D valid installation (make sure to compile the solver with, at least, the HDF flag activated).
-            SOL_PATH (str): Path of the .hsol files.
+            HSOL_PATH (str): Path of the .hsol files.
             MESH_PATH (str): Path of the .hmesh file.
-            HDF_PATH (str, optional): Path where you want your .hdf files at. Defaults to "".
+            OUT_FILES (str, optional): Path where you want your .hdf files at. Defaults to "".
             output_parameters (str, optional): Flags for the horses2plt utility. Defaults to "".
             log (bool, optional): Activates the stdout of horses2plt. Defaults to False.
         """
@@ -31,7 +31,7 @@ class HorsesDataHandler():
             raise Exception("The horses2plt utility is not found.")
 
         # solution files:
-        hsol_files: list[str] = [file for file in os.listdir(SOL_PATH) if file.endswith(f".hsol")] #makes a list of hsol files
+        hsol_files: list[str] = [file for file in os.listdir(HSOL_PATH) if file.endswith(f".hsol")] #makes a list of hsol files
         
         if not hsol_files: 
             raise Exception("No .hsol found.")
@@ -47,8 +47,8 @@ class HorsesDataHandler():
             print(">>> Nº of .hmesh files: ",len(mesh_files))
             
         # Save dir for hdf file:
-        if HDF_PATH == "": 
-            HDF_PATH = SOL_PATH
+        if OUT_FILES == "": 
+            OUT_FILES = HSOL_PATH
         
         # Parameters config:
         if output_parameters == "":
@@ -60,25 +60,23 @@ class HorsesDataHandler():
         else:
             log_control = "> /dev/null 2>&1"
             
-        
+    
         ## File generation:
-        os.system(str(horses2plt_ABS_DIR+" "+os.path.join(SOL_PATH,"*.hsol")+" "+
+        os.system(str(horses2plt_ABS_DIR+" "+os.path.join(HSOL_PATH,"*.hsol")+" "+
                       os.path.join(MESH_PATH,mesh_files[0])+" "+output_parameters)+" "+log_control)
         
-        # Move files to the desired location 
-        os.system(f"mv {SOL_PATH}/*.hdf {HDF_PATH}/")
-        
-        # Change the extension of the files to .h5
-        for file in os.listdir(HDF_PATH):
+        # Rename (to h5) and move files to the desired location
+        for file in os.listdir(HSOL_PATH):
             if file.endswith(".hdf"):
-                base = os.path.splitext(file)[0]
-                os.rename(os.path.join(HDF_PATH,file), os.path.join(HDF_PATH,base + ".h5"))
-
+                base_name = os.path.splitext(file)[0]
+                extension = ".h5"
+                os.rename(os.path.join(HSOL_PATH,file), os.path.join(OUT_FILES,base_name+extension))
+        
         # Size functionality
-        hdf_files: list[str] = [file for file in os.listdir(HDF_PATH) if file.endswith(f".h5")]
+        hdf_files: list[str] = [file for file in os.listdir(OUT_FILES) if file.endswith(f".h5")]
         size: int = 0
         for file in hdf_files:
-            current_file: int = os.path.getsize(os.path.join(HDF_PATH,file))
+            current_file: int = os.path.getsize(os.path.join(OUT_FILES,file))
             size = size + current_file
         if size < 1000:
             print(">>> Data size:", float(size/1E6), "MB")
