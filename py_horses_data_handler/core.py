@@ -67,9 +67,15 @@ class HorsesDataHandler():
         
         # Move files to the desired location 
         os.system(f"mv {SOL_PATH}/*.hdf {HDF_PATH}/")
+        
+        # Change the extension of the files to .h5
+        for file in os.listdir(HDF_PATH):
+            if file.endswith(".hdf"):
+                base = os.path.splitext(file)[0]
+                os.rename(os.path.join(HDF_PATH,file), os.path.join(HDF_PATH,base + ".h5"))
 
         # Size functionality
-        hdf_files: list[str] = [file for file in os.listdir(HDF_PATH) if file.endswith(f".hdf")]
+        hdf_files: list[str] = [file for file in os.listdir(HDF_PATH) if file.endswith(f".h5")]
         size: int = 0
         for file in hdf_files:
             current_file: int = os.path.getsize(os.path.join(HDF_PATH,file))
