@@ -62,9 +62,9 @@ class HorsesDataHandler:
     def __init__(self) -> None: 
         print(">>> Data handler started...")
     
-    def convert_hsol2hdf(self, SOLVER_PATH:str, HSOL_DIR: str, MESH_DIR: str, OUT_FILES_DIR:str = "",
-                         OUT_EXTENSION:str = ".h5", OUTPUT_PARAMETERS:str = "", LOG:bool = False,
-                         WRITE_SIM_PARAMETER:bool = True, EXTENDED_LOG:bool = True) -> None:
+    def convert_hsol2hdf(self, SOLVER_PATH:str, HSOL_DIR:str, MESH_DIR:str, OUT_FILES_DIR:Optional[str], 
+                        OUTPUT_PARAMETERS: Optional[str], OUT_EXTENSION:str = ".h5", LOG:bool = False,
+                        WRITE_SIM_PARAMETER:bool = True, EXTENDED_LOG:bool = True) -> None:
         """
         Function to convert .hsol binaries to .h5/.hdf with horses2ply utility.
 
@@ -72,15 +72,23 @@ class HorsesDataHandler:
             SOLVER_PATH (str): Path of a HORSES3D valid installation (make sure to compile the solver with, at least, the HDF flag activated).
             HSOL_DIR (str): Path of the .hsol files.
             MESH_DIR (str): Path of the .hmesh file.
-            OUT_FILES_DIR (str, optional): Path where you want your .hdf files at. Defaults to "".
-            OUT_EXTENSION (str, optional): Extension of the output files. Defaults to "h5". Options are: ",h5", ".hdf" or "both".
-            OUTPUT_PARAMETERS (str, optional): Flags for the horses2plt utility. Defaults to "".
+            OUT_FILES_DIR (str, optional): Path to save the output files. If None, uses HSOL_DIR. Defaults to None.
+            OUTPUT_PARAMETERS (str, optional): Flags for the horses2plt utility. Defaults to "--output-mode=FE --output-variables=rho,u,v,w,p,T,Mach --output-type=vtkhdf".
+            OUT_EXTENSION (str, optional): Extension of the output files. Defaults to "h5". Options are: ".h5", ".hdf" or "both".
             LOG (bool, optional): Activates the stdout of horses2plt. Defaults to False.
             WRITE_SIM_PARAMETER (bool, optional): If True, writes the simulation time and iteration in the .hdf files. Defaults to True. Please, note that this option slow down the conversion process around 4x times.
             EXTENDED_LOG (bool, optional): If True, shows the full stdout of horses2plt. Defaults to True.
         """
         
-        # Initial checks:
+        ## Initial configurations:
+        # Check and set default for OUT_FILES_DIR:
+        if OUT_FILES_DIR is None:
+            OUT_FILES_DIR = HSOL_DIR
+        # Parameters config:            
+        if OUTPUT_PARAMETERS is None:
+            OUTPUT_PARAMETERS = "--output-mode=FE --output-variables=rho,u,v,w,p,T,Mach --output-type=vtkhdf"
+        
+        ## Initial checks:
         if not os.path.isdir(OUT_FILES_DIR):
             os.makedirs(OUT_FILES_DIR)   
         if OUT_EXTENSION not in [".h5", ".hdf", "both"]:
@@ -117,14 +125,6 @@ class HorsesDataHandler:
         else:
             if LOG:
                 print(">>> Nº of .hmesh files: ",len(mesh_files))
-            
-        # Save dir for out file:
-        if OUT_FILES_DIR == "": 
-            OUT_FILES_DIR = HSOL_DIR
-        
-        # Parameters config:
-        if OUTPUT_PARAMETERS == "":
-            OUTPUT_PARAMETERS = "--output-mode=FE --output-variables=rho,u,v,w,p,T,Mach --output-type=vtkhdf"
         
         # shell LOG config:
         if EXTENDED_LOG:
@@ -133,7 +133,6 @@ class HorsesDataHandler:
             LOG_control: str = "> /dev/null 2>&1"
     
         ## File generation:
-        
         # Function to write time and iteration in the hdf file
         def write_data(file_path:str, time_value:float, iter_value:int) -> None:
             with h5py.File(file_path, "r+") as hdf_file:

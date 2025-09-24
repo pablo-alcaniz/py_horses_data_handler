@@ -34,23 +34,21 @@ This function get the ```.hsol``` solution binaries and convert them to usable `
 NOTE: for a correct visualization in Paraview ```.hdf``` extension are required.
 
 ``` python
-convert_hsol2hdf(SOLVER_PATH:str, HSOL_DIR: str, MESH_DIR: str, OUT_FILES_DIR:str = "", OUTPUT_PARAMETERS:str = "", LOG:bool = False, WRITE_SIM_PARAMETERS:bool = True, EXTENDED_LOG:bool = True) -> None
+convert_hsol2hdf(SOLVER_PATH:str, HSOL_DIR:str, MESH_DIR:str, OUT_FILES_DIR:Optional[str], OUTPUT_PARAMETERS: Optional[str], OUT_EXTENSION:str = ".h5", LOG:bool = False, WRITE_SIM_PARAMETER:bool = True, EXTENDED_LOG:bool = True) -> None:
 ```
 - Args:
     - ```SOLVER_PATH (str)```: Path of a HORSES3D valid installation (make sure to compile the solver with, at least, the HDF flag activated).
     - ```HSOL_DIR (str)```: Directory of the .hsol files.
     - ```MESH_DIR (str)```: Directory of the .hmesh file.
-    - ```OUT_FILES_DIR (str, optional)```: Directory where you want your .h5 files at. Defaults to ""^[1].
-    - ```OUTPUT_PARAMETERS (str, optional)```: Flags for the horses2plt utility. Defaults to ""^[2].
+    - ```OUT_FILES_DIR (str, optional)```: Path to save the output files. If None, uses ```HSOL_DIR```^[1]. Defaults to None.
+    - ```OUTPUT_PARAMETERS (str, optional)```: Flags for the horses2plt utility. Defaults to "--output-mode=FE --output-variables=rho,u,v,w,p,T,Mach --output-type=vtkhdf".
+    - ```OUT_EXTENSION (str, optional)```: Extension of the output files. Defaults to "h5". Options are: ".h5", ".hdf" or "both".
     - ```LOG (bool, optional)```: Activates the stdout of horses2plt. Defaults to False.
     - ```WRITE_SIM_PARAMETERS (bool, optional)```: If True, writes the simulation time and iteration in the .hdf files. Defaults to True. Please, note that this option slow down the conversion process around 4x times.
     - ```EXTENDED_LOG (bool, optional)```: If True, shows the full stdout of horses2plt. Defaults to True.
 - Returns:
     - ```None```
 
-[1] The default directory of the ```.hdf``` is ```SOL_PATH```.
-
-[2] The default ```output_parametres``` are ```"--output-mode=FE --output-variables=rho,u,v,w,p,T,Mach --output-type=vtkhdf"```.
 
 Basic use:
 ```python
