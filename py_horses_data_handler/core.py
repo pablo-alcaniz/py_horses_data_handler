@@ -62,9 +62,9 @@ class HorsesDataHandler:
     def __init__(self) -> None: 
         print(">>> Data handler started...")
     
-    def convert_hsol2hdf(self, SOLVER_PATH:str, HSOL_DIR:str, MESH_DIR:str, OUT_FILES_DIR:Optional[str], 
-                        OUTPUT_PARAMETERS: Optional[str], OUT_EXTENSION:str = ".h5", LOG:bool = False,
-                        WRITE_SIM_PARAMETER:bool = True, EXTENDED_LOG:bool = True) -> None:
+    def convert_hsol2hdf(self, SOLVER_PATH:str, HSOL_DIR:str, MESH_DIR:str, OUT_FILES_DIR:Optional[str] = None, 
+                        OUTPUT_PARAMETERS:Optional[str] = None, OUT_EXTENSION:str = ".h5", LOG:bool = True,
+                        WRITE_SIM_PARAMETER:bool = True, EXTENDED_LOG:bool = False) -> None:
         """
         Function to convert .hsol binaries to .h5/.hdf with horses2ply utility.
 
@@ -144,7 +144,7 @@ class HorsesDataHandler:
                 root_group.create_dataset('Time', data=time_value, dtype="float32")
                 if 'Iteration' in root_group:
                     del root_group['Iteration']
-                root_group.create_dataset('Iteration', iter_value, dtype="int32")
+                root_group.create_dataset('Iteration', data=iter_value, dtype="int32")
         
         # Convert each file and write time and iteration
         if WRITE_SIM_PARAMETER:
@@ -166,7 +166,7 @@ class HorsesDataHandler:
                     write_data(os.path.join(HSOL_DIR,base_name+".hdf"), time_value, iter_value)
                     if LOG:
                         print(f">>> Converted {file} at time {time_value}")
-                        print(f">>> Time attribute written in {base_name+'.hdf'}")
+                        print(f">>> Atributes written in {base_name+'.hdf'}")
                     if EXTENDED_LOG:
                         print(command_output)
         else:
