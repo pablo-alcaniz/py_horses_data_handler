@@ -85,6 +85,3 @@ explore_hdf5_structure(FILEPATH: str) -> None:
     - ```FILEPATH (str)```: Explicit path of the file to inspect.
 - Returns:
     - ```None```
-
-
-# pueba de nuevo equipo
