@@ -1,87 +1,173 @@
-# py_horses_dada_handler
-Handle the solution data provided by HORSES3D CFD solver. 
+# py_horses_data_handler
 
-## 1. Installation:
+Librería de Python para manejar los datos de solución que genera el solver CFD HORSES3D: convierte los binarios `.hsol` a ficheros [HDF5](https://www.hdfgroup.org/solutions/hdf5/) (`.h5`/`.hdf`) y ofrece herramientas para inspeccionarlos.
 
-1. Make a local copy of the lib:
+Requiere Python 3.13 o superior. La librería incluye anotaciones de tipos (fichero `py.typed`), de modo que los analizadores de tipos como `pyrefly` o `mypy` las reconocen al importarla.
 
-    ```$ git clone https://github.com/pablo-alcaniz/py_horses_data_handler.git ```
-2. Install the lib in the desired project with you env manager (i.e. uv/pip):
+## 1. Instalación
 
-    ```$ uv add [lib installation directory]```
-    
-    or
+1. Haz una copia local de la librería:
 
-    ```$ pip install -e [lib installation directory]```
+    ```bash
+    git clone https://github.com/pablo-alcaniz/py_horses_data_handler.git
+    ```
 
-## 2. Basic configuration:
-The first step is to import the ```HorsesDataHandler``` class:
+2. Instálala en el proyecto que quieras con tu gestor de entornos (por ejemplo `uv` o `pip`):
 
-``` python
+    ```bash
+    uv add [directorio de instalación de la librería]
+    ```
+
+    o bien
+
+    ```bash
+    pip install -e [directorio de instalación de la librería]
+    ```
+
+## 2. Configuración básica
+
+Importa la clase `HorsesDataHandler` y crea un objeto. Crear el objeto no necesita argumentos y no imprime nada:
+
+```python
 from py_horses_data_handler import HorsesDataHandler
-```
-And then just create an object calling the class: 
 
-``` python
 data_handler = HorsesDataHandler()
-``` 
-
-## 3. Features:
-
-### 1. ```convert_hsol2hdf```
-This function get the ```.hsol``` solution binaries and convert them to usable ```.h5``` [(HDF5)](https://www.hdfgroup.org/solutions/hdf5/)  files in a desired location. This function use the ```horses2plt``` build-in utility to make ```.hdf``` files, then, the files are converted to ```.h5``` extension for compatibility purposes. 
-
-NOTE: for a correct visualization in Paraview ```.hdf``` extension are required.
-
-``` python
-convert_hsol2hdf(SOLVER_PATH:str, HSOL_DIR:str, MESH_DIR:str, OUT_FILES_DIR:Optional[str], OUTPUT_PARAMETERS: Optional[str], OUT_EXTENSION:str = ".h5", LOG:bool = False, WRITE_SIM_PARAMETER:bool = True, EXTENDED_LOG:bool = True) -> None:
 ```
-- Args:
-    - ```SOLVER_PATH (str)```: Path of a HORSES3D valid installation (make sure to compile the solver with, at least, the HDF flag activated).
-    - ```HSOL_DIR (str)```: Directory of the .hsol files.
-    - ```MESH_DIR (str)```: Directory of the .hmesh file.
-    - ```OUT_FILES_DIR (str, optional)```: Path to save the output files. If None, uses ```HSOL_DIR```^[1]. Defaults to None.
-    - ```OUTPUT_PARAMETERS (str, optional)```: Flags for the horses2plt utility. Defaults to "--output-mode=FE --output-variables=rho,u,v,w,p,T,Mach --output-type=vtkhdf".
-    - ```OUT_EXTENSION (str, optional)```: Extension of the output files. Defaults to "h5". Options are: ".h5", ".hdf" or "both".
-    - ```LOG (bool, optional)```: Activates the stdout of horses2plt. Defaults to False.
-    - ```WRITE_SIM_PARAMETERS (bool, optional)```: If True, writes the simulation time and iteration in the .hdf files. Defaults to True. Please, note that this option slow down the conversion process around 4x times.
-    - ```EXTENDED_LOG (bool, optional)```: If True, shows the full stdout of horses2plt. Defaults to True.
-- Returns:
-    - ```None```
 
+Los nombres de los argumentos de los métodos van en MAYÚSCULAS (`SOLVER_PATH`, `HSOL_DIR`...). Es una decisión de diseño del proyecto y se mantiene.
 
-Basic use:
+Las rutas se pueden pasar como `str` o como cualquier objeto tipo ruta (`os.PathLike[str]`, por ejemplo un `pathlib.Path`).
+
+## 3. Funciones
+
+### 3.1. `convert_hsol2hdf`
+
+Convierte los binarios `.hsol` de una carpeta en ficheros HDF5. Usa la utilidad `horses2plt`, que viene con HORSES3D, para generar ficheros `.hdf` (con estructura VTKHDF, el formato de VTK sobre HDF5); después los deja en la carpeta de salida con la extensión pedida (`.h5` por defecto, por compatibilidad).
+
+Nota: para visualizar correctamente en Paraview hacen falta ficheros con extensión `.hdf`.
+
 ```python
+convert_hsol2hdf(
+    SOLVER_PATH: str | os.PathLike[str],
+    HSOL_DIR: str | os.PathLike[str],
+    MESH_DIR: str | os.PathLike[str],
+    OUT_FILES_DIR: str | os.PathLike[str] | None = None,
+    OUTPUT_PARAMETERS: str | None = None,
+    OUT_EXTENSION: Literal[".h5", ".hdf", "both"] = ".h5",
+    LOG: bool = True,
+    WRITE_SIM_PARAMETER: bool = True,
+    EXTENDED_LOG: bool = False,
+) -> None
+```
+
+**Argumentos**
+
+| Argumento | Tipo | Significado | Por defecto |
+|---|---|---|---|
+| `SOLVER_PATH` | ruta | Raíz de una instalación de HORSES3D compilada, al menos, con soporte HDF5. Debe contener `Solver/bin/horses2plt`. | obligatorio |
+| `HSOL_DIR` | ruta | Carpeta con los ficheros `.hsol`. Se procesan todos, ordenados por nombre. | obligatorio |
+| `MESH_DIR` | ruta | Fichero `.hmesh` o carpeta que contenga exactamente uno. Si la carpeta tiene varios, da `ValueError` (habría que elegir uno al azar). Pasa entonces la ruta del `.hmesh` concreto. | obligatorio |
+| `OUT_FILES_DIR` | ruta o `None` | Carpeta donde se guardan los resultados; se crea si no existe. Si es `None`, se usa `HSOL_DIR`. | `None` |
+| `OUTPUT_PARAMETERS` | `str` o `None` | Opciones de `horses2plt` en una sola cadena, troceada como lo haría un terminal (se respetan las comillas). Si es `None`, se usa `"--output-mode=FE --output-variables=rho,u,v,w,p,T,Mach --output-type=vtkhdf"`. | `None` |
+| `OUT_EXTENSION` | `".h5"`, `".hdf"` o `"both"` | Extensión de los ficheros de salida. Con `"both"` se guarda una copia `.hdf` en `OUT_FILES_DIR/hdf` y otra `.h5` en `OUT_FILES_DIR/h5`. | `".h5"` |
+| `LOG` | `bool` | Si es `True`, la librería imprime mensajes de progreso que empiezan por `>>>`. | `True` |
+| `WRITE_SIM_PARAMETER` | `bool` | Si es `True`, escribe el tiempo físico y la iteración de cada solución dentro del fichero (ver más abajo). Ralentiza la conversión unas 4 veces, porque lanza un proceso de `horses2plt` por fichero en lugar de uno solo para todos. | `True` |
+| `EXTENDED_LOG` | `bool` | Si es `True`, imprime la salida completa de `horses2plt`. | `False` |
+
+**Devuelve:** `None`. El resultado son los ficheros escritos en disco.
+
+**Qué se escribe con `WRITE_SIM_PARAMETER`.** `horses2plt` imprime el tiempo y la iteración de cada solución, y la librería los lee de esa salida y los guarda como datasets (matrices de datos de HDF5) en el grupo `/VTKHDF/SimulationInfo` de cada fichero:
+
+- `Time`: tiempo físico, en `float64`.
+- `Iteration`: número de iteración, en `int64`.
+
+Se usa doble precisión (64 bits) porque `float32` solo conserva unas 7 cifras significativas: en simulaciones largas, con tiempos grandes y pasos pequeños, se perdería resolución temporal. Antes de este cambio se guardaban en `float32`/`int32`. Si el fichero ya tenía estos datasets, se sobrescriben.
+
+**Qué ficheros se mueven.** Solo se mueven o copian los `.hdf` generados en esa ejecución. Otros `.hdf` que ya hubiera en `HSOL_DIR` se dejan donde están. La librería supone que `horses2plt` escribe cada `<nombre>.hdf` junto a su `<nombre>.hsol`.
+
+**Errores**
+
+| Excepción | Cuándo salta |
+|---|---|
+| `ValueError` | `OUT_EXTENSION` no es una de las tres opciones; `MESH_DIR` es un fichero sin extensión `.hmesh` o una carpeta con varios `.hmesh`; un `.hdf` generado no tiene el grupo `/VTKHDF` (no se creó con `--output-type=vtkhdf`); o no se encuentra el tiempo o la iteración en la salida de `horses2plt`. |
+| `FileNotFoundError` | No existe `SOLVER_PATH`, `HSOL_DIR`, `horses2plt` o la malla; no hay ningún `.hsol` en `HSOL_DIR`; o falta algún `.hdf` esperado tras la conversión. |
+| `RuntimeError` | `horses2plt` termina con un código de salida distinto de 0 (el mensaje incluye el comando y el final de su salida). |
+
+Todos los argumentos se validan antes de crear nada en disco, de modo que un error de configuración no deja carpetas a medias.
+
+**Ejemplo**
+
+```python
+from pathlib import Path
+
+from py_horses_data_handler import HorsesDataHandler
+
 data_handler = HorsesDataHandler()
 
-solver_path = "path/to/horses3d/installation"
-hsol_path = "path/to/hsol/files"
-sol_mesh = "path/to/mesh/file"
-out_path = "path/to/output/files"
-
-data_handler.convert_hsol2hdf(solver_path, hsol_path, sol_mesh, out_path)
+data_handler.convert_hsol2hdf(
+    SOLVER_PATH=Path("path/to/horses3d/installation"),
+    HSOL_DIR="path/to/hsol/files",
+    MESH_DIR="path/to/mesh/file.hmesh",
+    OUT_FILES_DIR="path/to/output/files",
+    OUT_EXTENSION="both",
+)
 ```
 
-### 2. ```get_sizes```
+### 3.2. `get_sizes`
 
-Get the size of all files (of a certain extension) in a certain directory.
+Suma el tamaño de los ficheros de una extensión dentro de una carpeta (sin entrar en subcarpetas). Imprime el total en MB (por debajo de 1 GB) o en GB, con prefijos decimales (1 MB = 10^6 bytes), y además lo devuelve.
 
 ```python
-get_sizes(PATH: str, EXTENSION: str = ".hdf") -> None
+get_sizes(PATH: str | os.PathLike[str], EXTENSION: str = ".hdf") -> int
 ```
-- Args:
-    - ```PATH (str)```: Path to examine.
-    - ```EXTENSION (str, optional)```: Extension of the files to search. Defaults to ".hdf".
-- Returns:
-    - ```None```
 
-### 3. ```explore_hdf5_structure```
-Funcion to see the basic data configuration in a .hdf file.
+**Argumentos**
+
+| Argumento | Tipo | Significado | Por defecto |
+|---|---|---|---|
+| `PATH` | ruta | Carpeta que se examina. | obligatorio |
+| `EXTENSION` | `str` | Terminación de los nombres de fichero que se cuentan. | `".hdf"` |
+
+**Devuelve:** un `int` con la suma de los tamaños, en bytes.
 
 ```python
-explore_hdf5_structure(FILEPATH: str) -> None:
+n_bytes = data_handler.get_sizes("path/to/output/files", ".h5")
+# imprime, por ejemplo: >>> Data size: 152.3 MB
 ```
-- Args:
-    - ```FILEPATH (str)```: Explicit path of the file to inspect.
-- Returns:
-    - ```None```
+
+### 3.3. `explore_hdf5_structure`
+
+Imprime los grupos y datasets de un fichero HDF5. Para cada dataset muestra su forma (`shape`) y su tipo de dato; el anidamiento se indica con sangría.
+
+```python
+explore_hdf5_structure(FILEPATH: str | os.PathLike[str]) -> None
+```
+
+**Argumentos**
+
+| Argumento | Tipo | Significado | Por defecto |
+|---|---|---|---|
+| `FILEPATH` | ruta | Fichero `.hdf`/`.h5` que se inspecciona. | obligatorio |
+
+**Devuelve:** `None`.
+
+```python
+data_handler.explore_hdf5_structure("path/to/output/files/solution.h5")
+```
+
+## 4. Desarrollo
+
+Las comprobaciones se lanzan con `uv` desde la raíz del repositorio (`--all-groups` instala también las herramientas de desarrollo):
+
+```bash
+uv sync --all-groups                    # prepara el entorno con todas las dependencias
+uv run --all-groups pytest -q           # tests
+uv run --all-groups pyrefly check       # comprobación de tipos
+uv run --all-groups ruff check          # revisión de estilo y errores comunes
+uv run --all-groups ruff format --check # comprueba el formato sin modificar nada
+```
+
+- `pytest` ejecuta los tests automáticos de la carpeta `tests/`.
+- `pyrefly` es un comprobador de tipos: lee las anotaciones y avisa de usos incoherentes sin ejecutar el código.
+- `ruff check` es un linter: revisa el código buscando errores comunes y faltas de estilo.
+- `ruff format --check` indica si el código cumple el formato estándar; sin `--check`, lo reformatea.
