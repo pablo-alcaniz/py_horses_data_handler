@@ -17,6 +17,7 @@ project-excludes = [
     "**/node_modules",
     "**/__pycache__",
     "**/*venv/**/*",
+    ".claude/**",
 ]
 
 [build-system]
