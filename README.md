@@ -2,7 +2,7 @@
 
 Librería de Python para manejar los datos de solución que genera el solver CFD HORSES3D: convierte los binarios `.hsol` a ficheros [HDF5](https://www.hdfgroup.org/solutions/hdf5/) (`.h5`/`.hdf`) y ofrece herramientas para inspeccionarlos.
 
-Requiere Python 3.13 o superior. La librería incluye anotaciones de tipos (fichero `py.typed`), de modo que los analizadores de tipos como `pyrefly` o `mypy` las reconocen al importarla.
+Requiere Python 3.13 o superior y una instalación de HORSES3D cuyo `horses2plt` esté compilado con soporte HDF5 (ver `SOLVER_PATH` en la sección 3.1). La librería incluye anotaciones de tipos (fichero `py.typed`), de modo que los analizadores de tipos como `pyrefly` o `mypy` las reconocen al importarla.
 
 ## 1. Instalación
 
@@ -64,7 +64,7 @@ convert_hsol2hdf(
 
 | Argumento | Tipo | Significado | Por defecto |
 |---|---|---|---|
-| `SOLVER_PATH` | ruta | Raíz de una instalación de HORSES3D compilada, al menos, con soporte HDF5. Debe contener `Solver/bin/horses2plt`. | obligatorio |
+| `SOLVER_PATH` | ruta | Raíz de una instalación de HORSES3D. Debe contener `Solver/bin/horses2plt`, y este debe estar compilado con HDF5 (`WITH_HDF5=YES`). Si no lo está, `horses2plt` falla con «HDF5 support must be enabled to save to VTKHDF format» y la librería lanza `RuntimeError`. | obligatorio |
 | `HSOL_DIR` | ruta | Carpeta con los ficheros `.hsol`. Se procesan todos, ordenados por nombre. | obligatorio |
 | `MESH_DIR` | ruta | Fichero `.hmesh` o carpeta que contenga exactamente uno. Si la carpeta tiene varios, da `ValueError` (habría que elegir uno al azar). Pasa entonces la ruta del `.hmesh` concreto. | obligatorio |
 | `OUT_FILES_DIR` | ruta o `None` | Carpeta donde se guardan los resultados; se crea si no existe. Si es `None`, se usa `HSOL_DIR`. | `None` |
@@ -78,10 +78,16 @@ convert_hsol2hdf(
 
 **Qué se escribe con `WRITE_SIM_PARAMETER`.** `horses2plt` imprime el tiempo y la iteración de cada solución, y la librería los lee de esa salida y los guarda como datasets (matrices de datos de HDF5) en el grupo `/VTKHDF/SimulationInfo` de cada fichero:
 
-- `Time`: tiempo físico, en `float64`.
+- `Time`: tiempo físico, en `float64` (con 4 cifras significativas; ver más abajo).
 - `Iteration`: número de iteración, en `int64`.
 
-Se usa doble precisión (64 bits) porque `float32` solo conserva unas 7 cifras significativas: en simulaciones largas, con tiempos grandes y pasos pequeños, se perdería resolución temporal. Antes de este cambio se guardaban en `float32`/`int32`. Si el fichero ya tenía estos datasets, se sobrescriben.
+Se guardan en doble precisión (64 bits) para no perder nada al escribir: antes eran `float32`/`int32`, y `float32` solo conserva unas 7 cifras significativas. Si el fichero ya tenía estos datasets, se sobrescriben.
+
+**Precisión de `Time`.** `horses2plt` imprime el tiempo con solo 4 cifras significativas (por ejemplo `Time:  3.732E-02`) y la librería lo lee de ese texto. Por tanto `Time` tiene 4 cifras significativas aunque se guarde en `float64`: la doble precisión evita perder datos al guardar, pero no añade precisión que el texto no tiene. `Iteration` es un entero exacto.
+
+**Límite de 132 bytes en las rutas.** HORSES3D guarda las rutas de fichero en variables de texto de longitud fija (`LINE_LENGTH = 132`, en `Solver/src/libs/foundation/SMConstants.f90`) y corta en silencio las más largas; con un `.hsol` demasiado largo, `horses2plt` ni siquiera da error: simplemente no convierte la solución. Con caracteres ASCII son 132 caracteres; una tilde o una ñ ocupan 2 bytes. Para alejarse del límite, la librería ejecuta `horses2plt` con `HSOL_DIR` como carpeta de trabajo, le pasa cada `.hsol` solo por su nombre y la malla con la más corta entre su ruta absoluta y la relativa a `HSOL_DIR`. Así, el límite afecta al nombre de cada `.hsol` y a esa ruta de la malla, pero no a `HSOL_DIR`, `SOLVER_PATH` ni `OUT_FILES_DIR`. Si se supera, se lanza `ValueError` antes de crear nada.
+
+**Espacios en las rutas.** Funcionan, tanto en las carpetas como en los nombres de fichero.
 
 **Qué ficheros se mueven.** Solo se mueven o copian los `.hdf` generados en esa ejecución. Otros `.hdf` que ya hubiera en `HSOL_DIR` se dejan donde están. La librería supone que `horses2plt` escribe cada `<nombre>.hdf` junto a su `<nombre>.hsol`.
 
@@ -89,9 +95,9 @@ Se usa doble precisión (64 bits) porque `float32` solo conserva unas 7 cifras s
 
 | Excepción | Cuándo salta |
 |---|---|
-| `ValueError` | `OUT_EXTENSION` no es una de las tres opciones; `MESH_DIR` es un fichero sin extensión `.hmesh` o una carpeta con varios `.hmesh`; un `.hdf` generado no tiene el grupo `/VTKHDF` (no se creó con `--output-type=vtkhdf`); o no se encuentra el tiempo o la iteración en la salida de `horses2plt`. |
+| `ValueError` | `OUT_EXTENSION` no es una de las tres opciones; `MESH_DIR` es un fichero sin extensión `.hmesh` o una carpeta con varios `.hmesh`; un `.hdf` generado no tiene el grupo `/VTKHDF` (no se creó con `--output-type=vtkhdf`); no se encuentra el tiempo o la iteración en la salida de `horses2plt`; o el nombre de algún `.hsol`, o la ruta de la malla (la más corta entre absoluta y relativa a `HSOL_DIR`), supera los 132 bytes. |
 | `FileNotFoundError` | No existe `SOLVER_PATH`, `HSOL_DIR`, `horses2plt` o la malla; no hay ningún `.hsol` en `HSOL_DIR`; o falta algún `.hdf` esperado tras la conversión. |
-| `RuntimeError` | `horses2plt` termina con un código de salida distinto de 0 (el mensaje incluye el comando y el final de su salida). |
+| `RuntimeError` | `horses2plt` termina con un código de salida distinto de 0, o su salida contiene `Error in file` o `ERROR STOP` aunque el código sea 0 (así falla, p. ej., si la ruta de la malla es demasiado larga: «Mesh file was not specified»). El mensaje incluye el comando, la carpeta de trabajo y las últimas 20 líneas de la salida. |
 
 Todos los argumentos se validan antes de crear nada en disco, de modo que un error de configuración no deja carpetas a medias.
 
