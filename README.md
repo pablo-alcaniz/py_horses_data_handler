@@ -71,19 +71,43 @@ convert_hsol2hdf(
 | `OUTPUT_PARAMETERS` | `str` o `None` | Opciones de `horses2plt` en una sola cadena, troceada como lo haría un terminal (se respetan las comillas). Si es `None`, se usa `"--output-mode=FE --output-variables=rho,u,v,w,p,T,Mach --output-type=vtkhdf"`. | `None` |
 | `OUT_EXTENSION` | `".h5"`, `".hdf"` o `"both"` | Extensión de los ficheros de salida. Con `"both"` se guarda una copia `.hdf` en `OUT_FILES_DIR/hdf` y otra `.h5` en `OUT_FILES_DIR/h5`. | `".h5"` |
 | `LOG` | `bool` | Si es `True`, la librería imprime mensajes de progreso que empiezan por `>>>`. | `True` |
-| `WRITE_SIM_PARAMETER` | `bool` | Si es `True`, escribe el tiempo físico y la iteración de cada solución dentro del fichero (ver más abajo). Ralentiza la conversión unas 4 veces, porque lanza un proceso de `horses2plt` por fichero en lugar de uno solo para todos. | `True` |
+| `WRITE_SIM_PARAMETER` | `bool` | Si es `True`, lee la cabecera binaria de cada `.hsol` y escribe su tiempo físico, su iteración y sus valores de referencia dentro del fichero convertido (ver más abajo). No ralentiza la conversión: `horses2plt` se llama una sola vez en cualquier caso. Si es `False`, no se leen las cabeceras. | `True` |
 | `EXTENDED_LOG` | `bool` | Si es `True`, imprime la salida completa de `horses2plt`. | `False` |
 
 **Devuelve:** `None`. El resultado son los ficheros escritos en disco.
 
-**Qué se escribe con `WRITE_SIM_PARAMETER`.** `horses2plt` imprime el tiempo y la iteración de cada solución, y la librería los lee de esa salida y los guarda como datasets (matrices de datos de HDF5) en el grupo `/VTKHDF/SimulationInfo` de cada fichero:
+**Qué se escribe con `WRITE_SIM_PARAMETER`.** La librería lee la *cabecera* de cada `.hsol` (los primeros 204 bytes del fichero, donde HORSES3D guarda los datos generales de la solución antes de los datos de los elementos) y guarda estos valores como datasets (matrices de datos de HDF5) escalares en el grupo `/VTKHDF/SimulationInfo` del `.hdf` correspondiente:
 
-- `Time`: tiempo físico, en `float64` (con 4 cifras significativas; ver más abajo).
-- `Iteration`: número de iteración, en `int64`.
+| Dataset | Tipo | Significado |
+|---|---|---|
+| `Time` | `float64` | Tiempo físico de la solución. |
+| `Iteration` | `int64` | Número de iteración. |
+| `Gamma` | `float64` | Cociente de calores específicos (adimensional). |
+| `GasConstant` | `float64` | Constante del gas R, en J/(kg·K). |
+| `ReferenceVelocity` | `float64` | Velocidad de referencia, en m/s. |
+| `ReferenceDensity` | `float64` | Densidad de referencia, en kg/m³. |
+| `ReferenceTemperature` | `float64` | Temperatura de referencia, en K. |
+| `MachNumber` | `float64` | Número de Mach de referencia (adimensional). |
 
-Se guardan en doble precisión (64 bits) para no perder nada al escribir: antes eran `float32`/`int32`, y `float32` solo conserva unas 7 cifras significativas. Si el fichero ya tenía estos datasets, se sobrescriben.
+Las unidades de los valores de referencia están deducidas de su significado físico, no vienen indicadas en el fichero. Si el `.hdf` ya tenía estos datasets, se sobrescriben.
 
-**Precisión de `Time`.** `horses2plt` imprime el tiempo con solo 4 cifras significativas (por ejemplo `Time:  3.732E-02`) y la librería lo lee de ese texto. Por tanto `Time` tiene 4 cifras significativas aunque se guarde en `float64`: la doble precisión evita perder datos al guardar, pero no añade precisión que el texto no tiene. `Iteration` es un entero exacto.
+**Precisión.** Los valores se leen en binario, tal como los escribe HORSES3D, y se guardan con toda su precisión de doble precisión (64 bits). Antes se leían del texto que imprime `horses2plt`, que solo da 4 cifras significativas (`Time:  4.033E-02` frente al valor real `0.04032508838441574`).
+
+**Formato de la cabecera de un `.hsol`.** HORSES3D abre el fichero con *acceso stream* (`form="unformatted", access="stream"`, en `Solver/src/libs/io/SolutionFile.f90`, líneas 152-153): escribe los bytes uno detrás de otro, sin los marcadores de registro que Fortran añade en otros modos. Los números se guardan en el orden de bytes de la máquina, *little-endian* (el byte menos significativo primero) en un PC x86-64. La librería lo lee con el módulo `struct` de la biblioteca estándar. Los offsets (posición en bytes desde el inicio del fichero, empezando en 0) son:
+
+| Offset | Bytes | Tipo | Campo | Línea de `SolutionFile.f90` donde se escribe |
+|---|---|---|---|---|
+| 0 | 128 | texto, relleno con `\0` | nombre del fichero | 157 |
+| 128 | 4 | `int32` | tipo de fichero (2 = solución, 3 = solución y gradientes...) | 161 |
+| 132 | 4 | `int32` | tipo de nodos (Gauss o Gauss-Lobatto) | 165 |
+| 136 | 4 | `int32` | número de elementos | 169 |
+| 140 | 4 | `int32` | iteración | 174 |
+| 144 | 8 | `float64` | tiempo físico | 175 |
+| 152 | 48 | 6 × `float64` | referencias: gamma, R, velocidad, densidad, temperatura, Mach | 179 |
+| 200 | 4 | `int32` | terminador, siempre 88 (`BEGINNING_DATA`) | 183 |
+| 204 | | | empiezan los datos de los elementos | |
+
+La librería comprueba el terminador (88) y el tipo de fichero: solo acepta los tipos de solución que admite `horses2plt` (2, 3, 4, 7, 8, 9 y 10). Un fichero de malla (tipos 1 y 6), un tipo desconocido, un fichero truncado o uno escrito con otro orden de bytes o con enteros de otro tamaño dan `ValueError`, antes de crear carpetas o llamar a `horses2plt`. Los datos de los elementos (a partir del byte 204) no se leen.
 
 **Límite de 132 bytes en las rutas.** HORSES3D guarda las rutas de fichero en variables de texto de longitud fija (`LINE_LENGTH = 132`, en `Solver/src/libs/foundation/SMConstants.f90`) y corta en silencio las más largas; con un `.hsol` demasiado largo, `horses2plt` ni siquiera da error: simplemente no convierte la solución. Con caracteres ASCII son 132 caracteres; una tilde o una ñ ocupan 2 bytes. Para alejarse del límite, la librería ejecuta `horses2plt` con `HSOL_DIR` como carpeta de trabajo, le pasa cada `.hsol` solo por su nombre y la malla con la más corta entre su ruta absoluta y la relativa a `HSOL_DIR`. Así, el límite afecta al nombre de cada `.hsol` y a esa ruta de la malla, pero no a `HSOL_DIR`, `SOLVER_PATH` ni `OUT_FILES_DIR`. Si se supera, se lanza `ValueError` antes de crear nada.
 
@@ -95,7 +119,7 @@ Se guardan en doble precisión (64 bits) para no perder nada al escribir: antes 
 
 | Excepción | Cuándo salta |
 |---|---|
-| `ValueError` | `OUT_EXTENSION` no es una de las tres opciones; `MESH_DIR` es un fichero sin extensión `.hmesh` o una carpeta con varios `.hmesh`; un `.hdf` generado no tiene el grupo `/VTKHDF` (no se creó con `--output-type=vtkhdf`); no se encuentra el tiempo o la iteración en la salida de `horses2plt`; o el nombre de algún `.hsol`, o la ruta de la malla (la más corta entre absoluta y relativa a `HSOL_DIR`), supera los 132 bytes. |
+| `ValueError` | `OUT_EXTENSION` no es una de las tres opciones; `MESH_DIR` es un fichero sin extensión `.hmesh` o una carpeta con varios `.hmesh`; un `.hdf` generado no tiene el grupo `/VTKHDF` (no se creó con `--output-type=vtkhdf`); con `WRITE_SIM_PARAMETER=True`, la cabecera de algún `.hsol` no es válida (menos de 204 bytes, terminador distinto de 88 o tipo que no es de solución); o el nombre de algún `.hsol`, o la ruta de la malla (la más corta entre absoluta y relativa a `HSOL_DIR`), supera los 132 bytes. |
 | `FileNotFoundError` | No existe `SOLVER_PATH`, `HSOL_DIR`, `horses2plt` o la malla; no hay ningún `.hsol` en `HSOL_DIR`; o falta algún `.hdf` esperado tras la conversión. |
 | `RuntimeError` | `horses2plt` termina con un código de salida distinto de 0, o su salida contiene `Error in file` o `ERROR STOP` aunque el código sea 0 (así falla, p. ej., si la ruta de la malla es demasiado larga: «Mesh file was not specified»). El mensaje incluye el comando, la carpeta de trabajo y las últimas 20 líneas de la salida. |
 

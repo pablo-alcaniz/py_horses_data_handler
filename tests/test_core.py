@@ -3,17 +3,23 @@
 No necesitan HORSES3D: ``subprocess.run`` del módulo ``core`` se sustituye por un falso
 (`FakeHorses2plt`) que crea, con h5py, el ``.hdf`` que escribiría ``horses2plt`` junto a
 cada ``.hsol`` (interpretando las rutas relativas desde la carpeta de trabajo ``cwd``, como
-el proceso real) y devuelve una salida de texto con ``Time`` e ``Iteration``. Todos los
-ficheros se crean en carpetas temporales (``tmp_path``).
+el proceso real). Los ``.hsol`` de los tests tienen una cabecera binaria válida, construida
+con `SyntheticHeader`, de la que salen ``Time``, ``Iteration`` y los valores de referencia.
+Todos los ficheros se crean en carpetas temporales (``tmp_path``).
 
-Las salidas de texto de ``horses2plt`` (`REAL_STDOUT_TEMPLATE`, `REAL_FAILURE_STDOUT` y
-`REAL_FAILURE_STDERR`) son extractos copiados de ejecuciones reales de HORSES3D, para que
-la lectura de ``Time``/``Iteration`` y la detección de errores se prueben con el formato
-verdadero y no con uno inventado.
+Datos reales, para probar con el formato verdadero y no con uno inventado:
+
+- ``tests/data/Cylinder_Re40_0000000030_header.hsol``: los 204 primeros bytes (la cabecera)
+  de un ``.hsol`` escrito por HORSES3D (cilindro a Re = 40, iteración 30).
+- `REAL_STDOUT`, `REAL_FAILURE_STDOUT` y `REAL_FAILURE_STDERR`: extractos copiados de
+  ejecuciones reales de ``horses2plt``, para probar la detección de errores.
 """
 
 import os
+import shutil
+import struct
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypedDict, Unpack, cast
@@ -23,12 +29,25 @@ import numpy as np
 import pytest
 
 from py_horses_data_handler import HorsesDataHandler, __version__, core
-from py_horses_data_handler.core import OutExtension, _get_iteration, _get_time
+from py_horses_data_handler.core import OutExtension, _HsolHeader, _read_hsol_header
 
-# Extracto fiel de la salida de `horses2plt` al convertir una solución (código 0). Solo se
-# han sustituido el valor de la iteración y el del tiempo por `{iteration}` y `{time}`. La
-# línea `Reference Temperature` está para comprobar que no se confunde con `Time`.
-REAL_STDOUT_TEMPLATE = """\
+# Cabecera real: los 204 primeros bytes de `RESULTS/Cylinder_Re40_0000000030.hsol`.
+REAL_HEADER_FILE = Path(__file__).parent / "data" / "Cylinder_Re40_0000000030_header.hsol"
+
+# Valores de referencia de esa cabecera, leídos con un volcado de bytes del fichero real.
+REAL_REFERENCE_VALUES = {
+    "Gamma": 1.4,
+    "GasConstant": 287.15,
+    "ReferenceVelocity": 68.15752995002745,
+    "ReferenceDensity": 1.2214535421047699,
+    "ReferenceTemperature": 288.8888888888889,
+    "MachNumber": 0.2,
+}
+
+# Extracto fiel, sin modificar, de la salida de `horses2plt` al convertir una solución
+# (código 0) de la iteración 0. El tiempo sale con 4 cifras (`ES10.3`), por eso ya no se lee
+# de aquí sino de la cabecera del `.hsol`.
+REAL_STDOUT = """\
           Loading Mesh File:
           -----------------
                Mesh file "manual/Cylinder_Re40_0000000000.hmesh":
@@ -43,21 +62,17 @@ REAL_STDOUT_TEMPLATE = """\
                Solution file "manual/Cylinder_Re40_0000000000.hsol":
                -----------------------------------------------------
                               ->      Solution file contains gradients: no
-                              ->                   Iteration: {iteration}
-                              ->                        Time: {time}
+                              ->                   Iteration: 0
+                              ->                        Time:  0.000E+00
                               ->          Reference velocity:  68.158
                               ->           Reference density:   1.221
                               ->       Reference Temperature: 288.889
                               ->       Reference Mach number:   0.200
 """
 
-# Salida real sin modificar: iteración 0 y tiempo 0 (el tiempo se escribe con ancho fijo, de
-# ahí el espacio inicial de `" 0.000E+00"`).
-REAL_STDOUT = REAL_STDOUT_TEMPLATE.format(iteration="0", time=" 0.000E+00")
-
-# Salida del falso por defecto: mismo formato real, con valores distintos de 0 para que los
-# tests comprueben que se escribe el valor leído y no uno por defecto.
-FAKE_STDOUT = REAL_STDOUT_TEMPLATE.format(iteration="10", time=" 1.500E-02")
+# Salida del falso por defecto. Sus `Time` e `Iteration` (0) no coinciden con los de las
+# cabeceras sintéticas: así se comprueba que los valores escritos salen de la cabecera.
+FAKE_STDOUT = REAL_STDOUT
 
 # Cabecera con la que empieza toda salida de horses2plt (recuadro de 100 columnas).
 _BANNER_BORDER = "#" * 100
@@ -136,9 +151,60 @@ class FakeHorses2plt:
         return subprocess.CompletedProcess(args, self.returncode, self.stdout, self.stderr)
 
 
+@dataclass(frozen=True)
+class SyntheticHeader:
+    """Cabecera de un ``.hsol`` con el formato binario de HORSES3D, para los tests.
+
+    Los valores por defecto son una solución válida (tipo 2) con un tiempo de muchas cifras
+    y referencias distintas de las reales, para que un error de offset se note.
+    """
+
+    name: str = "RESULTS/synthetic.hsol"
+    file_type: int = 2
+    node_type: int = 1
+    n_elements: int = 8
+    iteration: int = 12345
+    time: float = 1.2345678901234567e-2
+    references: tuple[float, ...] = (1.3, 296.8, 101.25, 0.987654321, 300.5, 0.31)
+    terminator: int = 88
+
+    def to_bytes(self, byte_order: str = "<") -> bytes:
+        """Empaqueta la cabecera en los 204 bytes que escribe HORSES3D.
+
+        Formato: nombre (128 bytes rellenados con ``\\0``; `struct` lo corta si es más
+        largo), 4 int32 (tipo, nodos, elementos, iteración), 1 float64 (tiempo), 6 float64
+        (referencias) y el int32 terminador. ``byte_order`` es ``"<"`` (little-endian) o
+        ``">"`` (big-endian, para probar que se detecta).
+        """
+        return struct.pack(
+            f"{byte_order}128s4id6di",
+            self.name.encode("utf-8"),
+            self.file_type,
+            self.node_type,
+            self.n_elements,
+            self.iteration,
+            self.time,
+            *self.references,
+            self.terminator,
+        )
+
+    @property
+    def reference_values(self) -> dict[str, float]:
+        """Referencias con los nombres de los datasets de ``SimulationInfo``."""
+        return dict(zip(core._REFERENCE_VALUE_NAMES, self.references, strict=True))
+
+
+def write_hsol(path: Path, header: SyntheticHeader) -> None:
+    """Escribe un ``.hsol`` con ``header`` y unos bytes de datos detrás (que no se leen)."""
+    path.write_bytes(header.to_bytes() + b"\xff" * 64)
+
+
 @dataclass
 class Case:
-    """Rutas de un caso sintético: instalación, soluciones, malla y salida."""
+    """Rutas de un caso sintético (instalación, soluciones, malla y salida) y cabeceras.
+
+    ``headers`` guarda la cabecera escrita en cada ``.hsol``, por nombre sin extensión.
+    """
 
     solver: Path
     horses2plt: Path
@@ -146,6 +212,7 @@ class Case:
     hsol_files: list[Path]
     mesh: Path
     out: Path
+    headers: dict[str, SyntheticHeader]
 
 
 def make_case(
@@ -159,7 +226,10 @@ def make_case(
 ) -> Case:
     """Crea en ``root`` una instalación falsa de HORSES3D, varios ``.hsol`` y una malla.
 
-    Los nombres de las carpetas se pueden cambiar (p. ej. para probar rutas con espacios).
+    Cada ``.hsol`` tiene una cabecera válida con iteración, tiempo y referencias propios
+    (dependen de su posición en ``stems``), para comprobar que cada ``.hdf`` recibe los de
+    su ``.hsol``. Los nombres de las carpetas se pueden cambiar (p. ej. para probar rutas
+    con espacios).
     """
     solver = root / solver_name
     horses2plt = solver / "Solver" / "bin" / "horses2plt"
@@ -168,15 +238,43 @@ def make_case(
     hsol_dir = root / hsol_dir_name
     hsol_dir.mkdir(parents=True)
     hsol_files = []
-    for stem in stems:
+    headers = {}
+    for index, stem in enumerate(stems, start=1):
         hsol = hsol_dir / f"{stem}.hsol"
-        hsol.write_bytes(b"\x00")
+        header = SyntheticHeader(
+            name=f"RESULTS/{stem}.hsol",
+            iteration=1000 * index + 7,
+            time=0.04032508838441574 * index,
+            references=(1.4, 287.15, 68.15752995002745 * index, 1.2214535421047699, 288.9, 0.2),
+        )
+        write_hsol(hsol, header)
         hsol_files.append(hsol)
+        headers[stem] = header
     mesh_dir = root / mesh_dir_name
     mesh_dir.mkdir()
     mesh = mesh_dir / "cylinder.hmesh"
     mesh.write_bytes(b"\x00")
-    return Case(solver, horses2plt, hsol_dir, hsol_files, mesh_dir, root / out_dir_name)
+    return Case(solver, horses2plt, hsol_dir, hsol_files, mesh_dir, root / out_dir_name, headers)
+
+
+def assert_simulation_info(hdf_path: Path, header: SyntheticHeader) -> None:
+    """Comprueba que ``SimulationInfo`` tiene los valores exactos de ``header`` y su tipo."""
+    with h5py.File(hdf_path, "r") as hdf_file:
+        info = hdf_file["VTKHDF/SimulationInfo"]
+        assert isinstance(info, h5py.Group)
+        expected: dict[str, tuple[float | int, type[np.generic]]] = {
+            "Time": (header.time, np.float64),
+            "Iteration": (header.iteration, np.int64),
+            **{name: (value, np.float64) for name, value in header.reference_values.items()},
+        }
+        assert set(info.keys()) == set(expected)
+        for name, (value, dtype) in expected.items():
+            dataset = info[name]
+            assert isinstance(dataset, h5py.Dataset)
+            assert dataset.shape == ()
+            assert dataset.dtype == dtype
+            # Igualdad exacta: el valor se copia de la cabecera sin pasar por texto.
+            assert dataset[()] == value
 
 
 @pytest.fixture
@@ -205,84 +303,117 @@ def convert(case: Case, **options: Unpack[ConvertOptions]) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# Lectura de Time e Iteration (criterios 1 y 2)
+# Lectura de la cabecera de los .hsol
 # --------------------------------------------------------------------------------------
 
 
-def test_get_time_valid() -> None:
-    out = "Some logs\nTime: 123.456\nMore logs"
-    assert _get_time(out) == pytest.approx(123.456)
+def test_header_offsets_match_fortran() -> None:
+    # Los offsets calculados como en SolutionFile.f90 coinciden con la tabla de la cabecera.
+    assert core._HSOL_FILE_TYPE_OFFSET == 128
+    assert core._HSOL_ITERATION_OFFSET == 140
+    assert core._HSOL_TIME_OFFSET == 144
+    assert core._HSOL_REFERENCES_OFFSET == 152
+    assert core._HSOL_TERMINATOR_OFFSET == 200
+    assert core._HSOL_HEADER_SIZE == 204
+    assert len(SyntheticHeader().to_bytes()) == 204
 
 
-def test_get_time_missing() -> None:
-    out = "No time here"
-    with pytest.raises(ValueError):
-        _get_time(out)
+def test_read_real_header() -> None:
+    # Cabecera de un .hsol real: horses2plt imprime `Time: 4.033E-02`, pero en el fichero
+    # está el valor completo. Se compara con `==`, sin tolerancia.
+    header = _read_hsol_header(REAL_HEADER_FILE)
+    assert header == _HsolHeader(
+        file_type=2,
+        iteration=30,
+        time=0.04032508838441574,
+        reference_values=REAL_REFERENCE_VALUES,
+    )
+    assert list(header.reference_values) == list(core._REFERENCE_VALUE_NAMES)
+    assert type(header.iteration) is int
+    assert type(header.time) is float
 
 
-def test_get_time_none() -> None:
-    with pytest.raises(ValueError):
-        _get_time(None)
+@pytest.mark.parametrize("file_type", [2, 3, 4, 7, 8, 9, 10])
+def test_read_synthetic_header_solution_types(tmp_path: Path, file_type: int) -> None:
+    # Todos los tipos de solución que acepta horses2plt, con un tiempo de 17 cifras, la
+    # mayor iteración que cabe en un int32 y datos detrás de la cabecera.
+    synthetic = SyntheticHeader(
+        name="RESULTS/a_long_case_name_0123456789.hsol",
+        file_type=file_type,
+        iteration=2**31 - 1,
+        time=1.2345678901234567e-5,
+    )
+    hsol = tmp_path / "case.hsol"
+    write_hsol(hsol, synthetic)
+    header = _read_hsol_header(hsol)
+    assert header.file_type == file_type
+    assert header.iteration == 2**31 - 1
+    assert header.time == 1.2345678901234567e-5
+    assert header.reference_values == synthetic.reference_values
 
 
-def test_get_iteration_valid() -> None:
-    out = "Start\nIteration: 42\nEnd"
-    assert _get_iteration(out) == 42
+def test_read_header_exactly_204_bytes(tmp_path: Path) -> None:
+    # Un fichero con solo la cabecera (sin datos) también se lee.
+    hsol = tmp_path / "case.hsol"
+    hsol.write_bytes(SyntheticHeader(iteration=0, time=0.0).to_bytes())
+    header = _read_hsol_header(hsol)
+    assert header.iteration == 0
+    assert header.time == 0.0
 
 
-def test_get_iteration_missing() -> None:
-    out = "No iter"
-    with pytest.raises(ValueError):
-        _get_iteration(out)
+@pytest.mark.parametrize("size", [0, 1, 203])
+def test_read_header_truncated(tmp_path: Path, size: int) -> None:
+    hsol = tmp_path / "short.hsol"
+    hsol.write_bytes(SyntheticHeader().to_bytes()[:size])
+    with pytest.raises(ValueError, match=f"has {size} bytes, fewer than the 204") as info:
+        _read_hsol_header(hsol)
+    assert str(hsol) in str(info.value)
 
 
-def test_get_iteration_none() -> None:
-    with pytest.raises(ValueError):
-        _get_iteration(None)
+def test_read_header_wrong_terminator(tmp_path: Path) -> None:
+    hsol = tmp_path / "bad.hsol"
+    write_hsol(hsol, SyntheticHeader(terminator=99))
+    with pytest.raises(ValueError, match="has 99 at byte 200 instead") as info:
+        _read_hsol_header(hsol)
+    message = str(info.value)
+    assert str(hsol) in message
+    assert "corrupt" in message
+    assert "byte order" in message
 
 
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        ("Time: 1.0E-03", 1.0e-3),
-        ("Time: -2.5", -2.5),
-        ("Time: 0.1D+01", 1.0),
-        ("Time: 12", 12.0),
-        ("Time: .5", 0.5),
-    ],
-)
-def test_get_time_formats(text: str, expected: float) -> None:
-    assert _get_time(f"log line\n{text}\nIteration: 3") == pytest.approx(expected)
+def test_read_header_big_endian_detected(tmp_path: Path) -> None:
+    # Un .hsol escrito en big-endian: el terminador 88 se lee como otro número.
+    hsol = tmp_path / "big_endian.hsol"
+    hsol.write_bytes(SyntheticHeader().to_bytes(byte_order=">"))
+    with pytest.raises(ValueError, match="terminator 88"):
+        _read_hsol_header(hsol)
 
 
-def test_real_output_time_and_iteration() -> None:
-    # Salida real de horses2plt: iteración 0 y tiempo 0.000E+00.
-    assert _get_time(REAL_STDOUT) == 0.0
-    assert _get_iteration(REAL_STDOUT) == 0
+@pytest.mark.parametrize("file_type", [1, 5, 6])
+def test_read_header_not_a_solution(tmp_path: Path, file_type: int) -> None:
+    # 1 y 6 son mallas; 5 (estadísticas con gradientes) tampoco lo acepta horses2plt.
+    hsol = tmp_path / "mesh.hsol"
+    write_hsol(hsol, SyntheticHeader(file_type=file_type))
+    with pytest.raises(ValueError, match=f"has file type {file_type}") as info:
+        _read_hsol_header(hsol)
+    assert str(hsol) in str(info.value)
 
 
-def test_real_output_time_with_exponent() -> None:
-    # Con el formato real, el exponente cuenta: la versión de `main` leía 1.234.
-    stdout = REAL_STDOUT_TEMPLATE.format(iteration="0", time=" 1.234E-03")
-    assert _get_time(stdout) == pytest.approx(1.234e-3)
-
-
-def test_real_output_reference_temperature_is_not_time() -> None:
-    # Sin la línea de Time, `Reference Temperature: 288.889` no debe leerse como tiempo.
-    stdout = "\n".join(line for line in REAL_STDOUT.splitlines() if "  Time:" not in line)
-    assert "Reference Temperature: 288.889" in stdout
-    with pytest.raises(ValueError, match="Time"):
-        _get_time(stdout)
-
-
-def test_time_read_from_stderr(tmp_path: Path, fake_run: FakeHorses2plt) -> None:
-    # Time en stderr aunque stdout no esté vacío: antes se ignoraba.
-    case = make_case(tmp_path, stems=("sol",))
-    fake_run.stdout = "Iteration: 7"
-    fake_run.stderr = "Time: 2.0"
-    convert(case, LOG=False)
-    with h5py.File(case.out / "sol.h5", "r") as hdf_file:
-        assert hdf_file["VTKHDF/SimulationInfo/Time"][()] == pytest.approx(2.0)
+def test_write_simulation_info_overwrites(tmp_path: Path) -> None:
+    # Si SimulationInfo ya tiene datasets (de otro tipo), se sustituyen por los nuevos.
+    hdf = tmp_path / "sol.hdf"
+    with h5py.File(hdf, "w") as hdf_file:
+        info = hdf_file.create_group("VTKHDF/SimulationInfo")
+        info.create_dataset("Time", data=-1, dtype="int32")
+        info.create_dataset("Gamma", data=0.0, dtype="float32")
+    header = _read_hsol_header(REAL_HEADER_FILE)
+    core._write_simulation_info(hdf, header)
+    synthetic = SyntheticHeader(
+        iteration=30,
+        time=0.04032508838441574,
+        references=tuple(REAL_REFERENCE_VALUES.values()),
+    )
+    assert_simulation_info(hdf, synthetic)
 
 
 # --------------------------------------------------------------------------------------
@@ -297,15 +428,24 @@ def test_convert_h5(tmp_path: Path, fake_run: FakeHorses2plt) -> None:
         out_file = case.out / f"{stem}.h5"
         assert out_file.is_file()
         assert not (case.hsol_dir / f"{stem}.hdf").exists()
-        with h5py.File(out_file, "r") as hdf_file:
-            time = hdf_file["VTKHDF/SimulationInfo/Time"]
-            iteration = hdf_file["VTKHDF/SimulationInfo/Iteration"]
-            assert isinstance(time, h5py.Dataset)
-            assert isinstance(iteration, h5py.Dataset)
-            assert time.dtype == np.float64
-            assert iteration.dtype == np.int64
-            assert time[()] == pytest.approx(1.5e-2)
-            assert iteration[()] == 10
+        # Cada fichero tiene los valores de la cabecera de su .hsol, no los de stdout.
+        assert_simulation_info(out_file, case.headers[stem])
+
+
+def test_simulation_info_from_real_header(tmp_path: Path, fake_run: FakeHorses2plt) -> None:
+    # Con la cabecera real, el tiempo escrito es el completo (horses2plt imprime 4.033E-02).
+    case = make_case(tmp_path, stems=())
+    hsol = case.hsol_dir / "Cylinder_Re40_0000000030.hsol"
+    shutil.copyfile(REAL_HEADER_FILE, hsol)
+    fake_run.stdout = REAL_STDOUT.replace("Iteration: 0", "Iteration: 30").replace(
+        "Time:  0.000E+00", "Time:  4.033E-02"
+    )
+    convert(case, LOG=False)
+    with h5py.File(case.out / "Cylinder_Re40_0000000030.h5", "r") as hdf_file:
+        assert hdf_file["VTKHDF/SimulationInfo/Time"][()] == 0.04032508838441574
+        assert hdf_file["VTKHDF/SimulationInfo/Iteration"][()] == 30
+        for name, value in REAL_REFERENCE_VALUES.items():
+            assert hdf_file[f"VTKHDF/SimulationInfo/{name}"][()] == value
 
 
 def test_convert_hdf_in_place(tmp_path: Path, fake_run: FakeHorses2plt) -> None:
@@ -391,19 +531,18 @@ def test_default_output_parameters(tmp_path: Path, fake_run: FakeHorses2plt) -> 
     ]
 
 
-def test_write_sim_parameter_true_one_call_per_file_sorted(
-    tmp_path: Path, fake_run: FakeHorses2plt
+@pytest.mark.parametrize("write_sim_parameter", [True, False])
+def test_single_call_with_all_hsol_sorted(
+    tmp_path: Path, fake_run: FakeHorses2plt, write_sim_parameter: bool
 ) -> None:
+    # Una sola llamada a horses2plt con todos los .hsol en orden, se escriban o no los datos.
     case = make_case(tmp_path, stems=("b", "c", "a"))
-    convert(case, LOG=False)
-    hsol_args = [args[1] for args, _ in fake_run.calls]
-    assert hsol_args == [f"{s}.hsol" for s in ("a", "b", "c")]
-    assert all(kwargs["cwd"] == case.hsol_dir for _, kwargs in fake_run.calls)
-
-
-def test_write_sim_parameter_false_single_call(tmp_path: Path, fake_run: FakeHorses2plt) -> None:
-    case = make_case(tmp_path, stems=("b", "c", "a"))
-    convert(case, WRITE_SIM_PARAMETER=False, OUTPUT_PARAMETERS="--output-type=vtkhdf")
+    convert(
+        case,
+        WRITE_SIM_PARAMETER=write_sim_parameter,
+        OUTPUT_PARAMETERS="--output-type=vtkhdf",
+        LOG=False,
+    )
     assert len(fake_run.calls) == 1
     args, kwargs = fake_run.calls[0]
     assert not kwargs.get("shell", False)
@@ -419,8 +558,64 @@ def test_write_sim_parameter_false_single_call(tmp_path: Path, fake_run: FakeHor
     for stem in ("a", "b", "c"):
         out_file = case.out / f"{stem}.h5"
         assert out_file.is_file()
-        with h5py.File(out_file, "r") as hdf_file:
-            assert "SimulationInfo" not in hdf_file["VTKHDF"]
+        if write_sim_parameter:
+            assert_simulation_info(out_file, case.headers[stem])
+        else:
+            with h5py.File(out_file, "r") as hdf_file:
+                assert "SimulationInfo" not in hdf_file["VTKHDF"]
+
+
+def _truncated(hsol: Path) -> None:
+    hsol.write_bytes(SyntheticHeader().to_bytes()[:100])
+
+
+def _bad_terminator(hsol: Path) -> None:
+    write_hsol(hsol, SyntheticHeader(terminator=0))
+
+
+def _mesh_file_type(hsol: Path) -> None:
+    write_hsol(hsol, SyntheticHeader(file_type=1))
+
+
+@pytest.mark.parametrize(
+    ("corrupt", "message"),
+    [
+        (_truncated, "fewer than the 204"),
+        (_bad_terminator, "terminator 88"),
+        (_mesh_file_type, "file type 1"),
+    ],
+)
+def test_invalid_header_rejected_before_horses2plt(
+    tmp_path: Path,
+    fake_run: FakeHorses2plt,
+    corrupt: Callable[[Path], None],
+    message: str,
+) -> None:
+    # Basta con que un .hsol (el último por orden) tenga mal la cabecera para que no se haga
+    # nada: ni carpeta de salida ni llamada a horses2plt.
+    case = make_case(tmp_path, stems=("sol_0001", "sol_0002", "sol_0003"))
+    corrupt(case.hsol_files[-1])
+    with pytest.raises(ValueError, match=message) as info:
+        convert(case, LOG=False)
+    assert "sol_0003.hsol" in str(info.value)
+    assert fake_run.calls == []
+    assert not case.out.exists()
+
+
+def test_write_sim_parameter_false_does_not_read_headers(
+    tmp_path: Path, fake_run: FakeHorses2plt, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Con WRITE_SIM_PARAMETER=False no se leen cabeceras: una inválida no impide convertir.
+    case = make_case(tmp_path, stems=("sol",))
+    case.hsol_files[0].write_bytes(b"\x00")
+
+    def fail_if_called(hsol_file: Path) -> _HsolHeader:
+        raise AssertionError(f"header read for {hsol_file}")
+
+    monkeypatch.setattr(core, "_read_hsol_header", fail_if_called)
+    convert(case, WRITE_SIM_PARAMETER=False, LOG=False)
+    assert len(fake_run.calls) == 1
+    assert (case.out / "sol.h5").is_file()
 
 
 def test_foreign_hdf_untouched(tmp_path: Path, fake_run: FakeHorses2plt) -> None:
@@ -455,9 +650,12 @@ def test_log_false_silent(
 def test_log_true_prints_progress(
     tmp_path: Path, fake_run: FakeHorses2plt, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # Un mensaje por fichero con el tiempo completo de su cabecera.
     case = make_case(tmp_path, stems=("sol",))
     convert(case)
-    assert ">>> " in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert ">>> " in out
+    assert ">>> sol.hsol: time 0.04032508838441574, iteration 1007 written in sol.hdf" in out
 
 
 # --------------------------------------------------------------------------------------
@@ -679,7 +877,10 @@ def test_mesh_path_at_limit_accepted(tmp_path: Path, fake_run: FakeHorses2plt) -
     assert (case.out / "sol.h5").is_file()
 
 
-def test_missing_expected_hdf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("write_sim_parameter", [True, False])
+def test_missing_expected_hdf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write_sim_parameter: bool
+) -> None:
     # horses2plt termina bien pero no escribe el .hdf esperado.
     case = make_case(tmp_path)
 
@@ -688,7 +889,7 @@ def test_missing_expected_hdf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(core.subprocess, "run", run_without_output)
     with pytest.raises(FileNotFoundError):
-        convert(case, WRITE_SIM_PARAMETER=False)
+        convert(case, WRITE_SIM_PARAMETER=write_sim_parameter)
 
 
 def test_hdf_without_vtkhdf(tmp_path: Path, fake_run: FakeHorses2plt) -> None:
@@ -712,7 +913,12 @@ def test_mesh_file_path(tmp_path: Path, fake_run: FakeHorses2plt) -> None:
     case.mesh = case.mesh / "other.hmesh"
     convert(case, LOG=False)
     args, _ = fake_run.calls[0]
-    assert args[2] == os.path.join("..", "mesh", "other.hmesh")
+    # Una sola llamada: ejecutable, los dos .hsol y después la malla.
+    assert args[1:4] == [
+        "sol_0001.hsol",
+        "sol_0002.hsol",
+        os.path.join("..", "mesh", "other.hmesh"),
+    ]
     assert (case.out / "sol_0001.h5").is_file()
 
 

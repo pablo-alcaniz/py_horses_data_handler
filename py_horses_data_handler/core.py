@@ -1,26 +1,30 @@
 """Núcleo de la librería: conversión e inspección de soluciones de HORSES3D.
 
 Este módulo contiene la clase pública `HorsesDataHandler`, que es lo que importan los
-usuarios (se reexporta desde ``py_horses_data_handler/__init__.py``), y dos funciones
-auxiliares privadas que leen el tiempo físico y la iteración de la salida de texto de
-``horses2plt``.
+usuarios (se reexporta desde ``py_horses_data_handler/__init__.py``), y funciones
+auxiliares privadas. Entre ellas, `_read_hsol_header` lee la cabecera binaria de un
+``.hsol`` (sus 204 primeros bytes) para obtener el tiempo físico, la iteración y los valores
+de referencia con toda su precisión (la salida de texto de ``horses2plt`` solo da 4 cifras).
 
 Flujo de `HorsesDataHandler.convert_hsol2hdf`:
 
 1. Valida todos los argumentos antes de crear nada en disco, incluido el límite de 132
-   bytes (con caracteres ASCII, 132 caracteres) que HORSES3D impone a las rutas de fichero.
-2. Llama a la utilidad ``horses2plt`` de HORSES3D (un proceso externo), desde la carpeta de
-   los ``.hsol``, para convertir los binarios ``.hsol`` en ficheros HDF5 con estructura
-   VTKHDF (``.hdf``).
-3. Opcionalmente, escribe el tiempo y la iteración de cada solución dentro del ``.hdf``.
+   bytes (con caracteres ASCII, 132 caracteres) que HORSES3D impone a las rutas de fichero
+   y, si se van a escribir, las cabeceras de todos los ``.hsol``.
+2. Llama una sola vez a la utilidad ``horses2plt`` de HORSES3D (un proceso externo), desde
+   la carpeta de los ``.hsol``, para convertir los binarios ``.hsol`` en ficheros HDF5 con
+   estructura VTKHDF (``.hdf``).
+3. Opcionalmente, escribe en cada ``.hdf`` el tiempo, la iteración y los valores de
+   referencia leídos de la cabecera de su ``.hsol``.
 4. Mueve o copia los ficheros generados a la carpeta de salida con la extensión pedida.
 """
 
 import os
-import re
 import shlex
 import shutil
+import struct
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -42,12 +46,64 @@ _DEFAULT_OUTPUT_PARAMETERS: str = (
 # Ruta de horses2plt relativa a la raíz de la instalación de HORSES3D.
 _HORSES2PLT_RELATIVE_PATH: Path = Path("Solver") / "bin" / "horses2plt"
 
-# Número real con signo, decimales opcionales y exponente opcional. El exponente admite
-# `D`/`d` porque Fortran escribe así la doble precisión (p. ej. `0.1D+01` = 1.0).
-_TIME_PATTERN: re.Pattern[str] = re.compile(
-    r"Time:\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[EeDd][+-]?\d+)?)"
+# --- Cabecera binaria de los .hsol ---------------------------------------------------------
+# HORSES3D escribe los .hsol con `form="unformatted", access="stream"`
+# (`Solver/src/libs/io/SolutionFile.f90`, l. 152-153): bytes seguidos, sin los marcadores de
+# registro que Fortran añade a los ficheros secuenciales, en el orden de bytes de la máquina
+# (little-endian en x86-64). Los offsets se calculan como en Fortran (l. 88-96), pero
+# empezando en 0: el `POS` de Fortran empieza en 1, así que offset = POS - 1.
+
+# Tamaños de los tipos. `SIZEOF_INT` es un `integer` por defecto de gfortran (4 bytes) y
+# `SIZEOF_RP` un real `RP = selected_real_kind(14)` (8 bytes, doble precisión)
+# (`Solver/src/libs/foundation/SMConstants.f90`, l. 9-20).
+_SIZEOF_INT: int = 4
+_SIZEOF_RP: int = 8
+# Longitud del nombre del fichero guardado al principio (`SOLFILE_STR_LEN`, l. 72), en bytes.
+_SOLFILE_STR_LEN: int = 128
+# Número de valores de referencia guardados (`NO_OF_SAVED_REFS`, l. 75).
+_NO_OF_SAVED_REFS: int = 6
+
+# Offsets en bytes desde el principio del fichero (`POS_*`, l. 88-96).
+_HSOL_FILE_TYPE_OFFSET: int = _SOLFILE_STR_LEN  # 128, POS_FILETYPE
+_HSOL_NODE_TYPE_OFFSET: int = _HSOL_FILE_TYPE_OFFSET + _SIZEOF_INT  # 132, POS_NODETYPE
+_HSOL_NO_OF_ELEMENTS_OFFSET: int = _HSOL_NODE_TYPE_OFFSET + _SIZEOF_INT  # 136
+_HSOL_ITERATION_OFFSET: int = _HSOL_NO_OF_ELEMENTS_OFFSET + _SIZEOF_INT  # 140, POS_ITER
+_HSOL_TIME_OFFSET: int = _HSOL_ITERATION_OFFSET + _SIZEOF_INT  # 144, POS_TIME
+_HSOL_REFERENCES_OFFSET: int = _HSOL_TIME_OFFSET + _SIZEOF_RP  # 152, POS_REFS
+_HSOL_TERMINATOR_OFFSET: int = (
+    _HSOL_REFERENCES_OFFSET + _NO_OF_SAVED_REFS * _SIZEOF_RP
+)  # 200, POS_TERMINATOR
+# Tamaño de la cabecera: los datos empiezan justo detrás (`POS_INIT_DATA`).
+_HSOL_HEADER_SIZE: int = _HSOL_TERMINATOR_OFFSET + _SIZEOF_INT  # 204
+
+# Formatos de `struct`: `<` fija little-endian y sin relleno; `i` es int32 y `d` float64.
+_INT32_FORMAT: str = "<i"
+_FLOAT64_FORMAT: str = "<d"
+_REFERENCES_FORMAT: str = f"<{_NO_OF_SAVED_REFS}d"
+
+# Valor que HORSES3D escribe al final de la cabecera (`BEGINNING_DATA`, l. 74, escrito en
+# l. 183). Si no aparece en su sitio, el fichero no tiene la estructura esperada.
+_HSOL_BEGINNING_DATA: int = 88
+
+# Tipos de fichero que horses2plt acepta como solución
+# (`Solver/src/addons/horses2tecplot/Storage.f90`, l. 236-279; valores en
+# `SolutionFile.f90`, l. 61-70): 2 SOLUTION_FILE, 3 SOLUTION_AND_GRADIENTS_FILE, 4 STATS_FILE,
+# 7 ZONE_SOLUTION_FILE, 8 ZONE_SOLUTION_AND_DOT_FILE, 9 SOLUTION_AND_SENSOR_FILE y
+# 10 SOLUTION_AND_GRADIENTS_AND_SENSOR_FILE. Quedan fuera las mallas (1 MESH_FILE y
+# 6 ZONE_MESH_FILE) y 5 STATS_AND_GRADIENTS_FILE, que horses2plt también rechaza.
+_HSOL_SOLUTION_FILE_TYPES: tuple[int, ...] = (2, 3, 4, 7, 8, 9, 10)
+
+# Nombres de los datasets de los valores de referencia, en el orden en que se guardan
+# (índices `GAMMA_REF`, `RGAS_REF`, `V_REF`, `RHO_REF`, `T_REF` y `MACH_REF`, l. 77-82):
+# gamma, constante del gas R, velocidad, densidad, temperatura y número de Mach.
+_REFERENCE_VALUE_NAMES: tuple[str, ...] = (
+    "Gamma",
+    "GasConstant",
+    "ReferenceVelocity",
+    "ReferenceDensity",
+    "ReferenceTemperature",
+    "MachNumber",
 )
-_ITERATION_PATTERN: re.Pattern[str] = re.compile(r"Iteration:\s*(\d+)")
 
 # Número de líneas finales de la salida de horses2plt que se incluyen en los mensajes de
 # error. Basta para ver el motivo del fallo y el `ERROR STOP` con su traza.
@@ -66,69 +122,91 @@ _HORSES2PLT_ERROR_MARKERS: tuple[str, ...] = ("Error in file", "ERROR STOP")
 _HORSES_MAX_PATH_LENGTH: int = 132
 
 
-def _get_time(stdout: str | None) -> float:
-    """Extrae el tiempo físico de la salida de texto de ``horses2plt``.
+@dataclass(frozen=True)
+class _HsolHeader:
+    """Datos de la cabecera de un ``.hsol`` que se guardan en ``/VTKHDF/SimulationInfo``.
+
+    Attributes
+    ----------
+    file_type : int
+        Tipo de fichero de HORSES3D (uno de ``_HSOL_SOLUTION_FILE_TYPES``; p. ej. 2 es una
+        solución sin gradientes).
+    iteration : int
+        Iteración del solver en la que se guardó la solución.
+    time : float
+        Tiempo físico de la solución, tal y como lo guarda HORSES3D (float64, sin redondear).
+    reference_values : dict of str to float
+        Valores de referencia y del gas, con las claves de ``_REFERENCE_VALUE_NAMES`` y en
+        ese orden: gamma (adimensional), constante del gas R (J/(kg·K)), velocidad (m/s),
+        densidad (kg/m³), temperatura (K) y número de Mach (adimensional).
+    """
+
+    file_type: int
+    iteration: int
+    time: float
+    reference_values: dict[str, float]
+
+
+def _read_hsol_header(hsol_file: Path) -> _HsolHeader:
+    """Lee el tipo, la iteración, el tiempo y las referencias de la cabecera de un ``.hsol``.
+
+    Solo lee los ``_HSOL_HEADER_SIZE`` (204) primeros bytes; los datos de los elementos, que
+    vienen detrás, no se tocan. Los valores se leen como little-endian (el orden de bytes de
+    x86-64, donde se ejecuta HORSES3D), con enteros de 4 bytes y reales de 8 bytes.
 
     Parameters
     ----------
-    stdout : str or None
-        Texto impreso por ``horses2plt`` (salida estándar y de errores juntas).
+    hsol_file : pathlib.Path
+        Fichero ``.hsol`` escrito por HORSES3D.
 
     Returns
     -------
-    float
-        Valor que sigue a ``Time:``, en las unidades en que lo escribe HORSES3D.
+    _HsolHeader
+        Tipo de fichero, iteración, tiempo y los 6 valores de referencia.
 
     Raises
     ------
     ValueError
-        Si el texto está vacío o es ``None``, si no contiene ``Time:`` o si el valor no se
-        puede convertir a ``float``.
+        Si el fichero tiene menos de 204 bytes; si en el byte 200 no está el terminador 88
+        (fichero corrupto, que no es de HORSES3D o escrito con otro orden de bytes o con
+        enteros/reales de otro tamaño); o si el tipo de fichero no es de solución (p. ej. una
+        malla).
+    OSError
+        Si el fichero no se puede abrir (no existe, sin permisos...).
     """
-    if not stdout:
-        raise ValueError("stdout is empty or None; cannot extract Time")
-    time_match = _TIME_PATTERN.search(stdout)
-    if not time_match:
-        # Un fragmento del texto ayuda a ver qué ha impreso realmente horses2plt.
-        snippet = stdout[:200].replace("\n", "\\n")
-        raise ValueError(f"Could not find 'Time' in output. stdout snippet: {snippet!r}")
-    raw_value = time_match.group(1)
-    try:
-        # Python no entiende el exponente Fortran `D`: se traduce a `E`.
-        return float(raw_value.replace("D", "E").replace("d", "e"))
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"Failed to parse Time value: {raw_value!r}") from exc
-
-
-def _get_iteration(stdout: str | None) -> int:
-    """Extrae el número de iteración de la salida de texto de ``horses2plt``.
-
-    Parameters
-    ----------
-    stdout : str or None
-        Texto impreso por ``horses2plt`` (salida estándar y de errores juntas).
-
-    Returns
-    -------
-    int
-        Valor entero que sigue a ``Iteration:``.
-
-    Raises
-    ------
-    ValueError
-        Si el texto está vacío o es ``None``, si no contiene ``Iteration:`` o si el valor no
-        se puede convertir a ``int``.
-    """
-    if not stdout:
-        raise ValueError("stdout is empty or None; cannot extract Iteration")
-    iter_match = _ITERATION_PATTERN.search(stdout)
-    if not iter_match:
-        snippet = stdout[:200].replace("\n", "\\n")
-        raise ValueError(f"Could not find 'Iteration' in output. stdout snippet: {snippet!r}")
-    try:
-        return int(iter_match.group(1))
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"Failed to parse Iteration value: {iter_match.group(1)!r}") from exc
+    with hsol_file.open("rb") as stream:
+        raw = stream.read(_HSOL_HEADER_SIZE)
+    if len(raw) < _HSOL_HEADER_SIZE:
+        raise ValueError(
+            f"The file {hsol_file} has {len(raw)} bytes, fewer than the {_HSOL_HEADER_SIZE} "
+            "bytes of a HORSES3D .hsol header: it is truncated or not a .hsol file."
+        )
+    # El terminador va primero: si no cuadra, el resto de los campos no significa nada.
+    (terminator,) = struct.unpack_from(_INT32_FORMAT, raw, _HSOL_TERMINATOR_OFFSET)
+    if terminator != _HSOL_BEGINNING_DATA:
+        raise ValueError(
+            f"The file {hsol_file} has {terminator} at byte {_HSOL_TERMINATOR_OFFSET} instead "
+            f"of the header terminator {_HSOL_BEGINNING_DATA} (BEGINNING_DATA). The file may be "
+            "corrupt, not a HORSES3D .hsol file, or written with a different byte order or "
+            "integer/real sizes (only little-endian with 4-byte integers and 8-byte reals is "
+            "supported)."
+        )
+    (file_type,) = struct.unpack_from(_INT32_FORMAT, raw, _HSOL_FILE_TYPE_OFFSET)
+    if file_type not in _HSOL_SOLUTION_FILE_TYPES:
+        accepted = ", ".join(str(value) for value in _HSOL_SOLUTION_FILE_TYPES)
+        raise ValueError(
+            f"The file {hsol_file} has file type {file_type}, which horses2plt does not accept "
+            f"as a solution (accepted types: {accepted}; 1 and 6 are mesh files)."
+        )
+    (iteration,) = struct.unpack_from(_INT32_FORMAT, raw, _HSOL_ITERATION_OFFSET)
+    (time,) = struct.unpack_from(_FLOAT64_FORMAT, raw, _HSOL_TIME_OFFSET)
+    references = struct.unpack_from(_REFERENCES_FORMAT, raw, _HSOL_REFERENCES_OFFSET)
+    return _HsolHeader(
+        file_type=file_type,
+        iteration=iteration,
+        time=time,
+        reference_values=dict(zip(_REFERENCE_VALUE_NAMES, references, strict=True)),
+    )
 
 
 def _resolve_mesh_file(mesh_dir: Path) -> Path:
@@ -305,20 +383,21 @@ def _run_horses2plt(
     return process
 
 
-def _write_simulation_info(file_path: Path, time_value: float, iter_value: int) -> None:
-    """Escribe el tiempo y la iteración en el grupo ``/VTKHDF/SimulationInfo``.
+def _write_simulation_info(file_path: Path, header: _HsolHeader) -> None:
+    """Escribe el tiempo, la iteración y las referencias en ``/VTKHDF/SimulationInfo``.
 
-    Se guardan como datasets escalares (no como atributos): ``Time`` en float64 e
-    ``Iteration`` en int64. Si ya existían, se sobrescriben.
+    Se guardan como datasets escalares (no como atributos): ``Time`` en float64,
+    ``Iteration`` en int64 y un float64 por cada valor de referencia, con los nombres de
+    ``_REFERENCE_VALUE_NAMES`` (``Gamma``, ``GasConstant``, ``ReferenceVelocity``,
+    ``ReferenceDensity``, ``ReferenceTemperature`` y ``MachNumber``). Si ya existían, se
+    sobrescriben.
 
     Parameters
     ----------
     file_path : pathlib.Path
         Fichero ``.hdf`` generado por ``horses2plt``.
-    time_value : float
-        Tiempo físico de la solución.
-    iter_value : int
-        Iteración de la solución.
+    header : _HsolHeader
+        Cabecera del ``.hsol`` del que sale ``file_path``.
 
     Raises
     ------
@@ -334,13 +413,16 @@ def _write_simulation_info(file_path: Path, time_value: float, iter_value: int) 
                 "Generate it with the horses2plt option --output-type=vtkhdf."
             )
         info_group = vtkhdf_group.require_group("SimulationInfo")
-        # h5py no deja cambiar el tipo de un dataset existente: se borra y se crea de nuevo.
-        if "Time" in info_group:
-            del info_group["Time"]
-        info_group.create_dataset("Time", data=time_value, dtype="float64")
-        if "Iteration" in info_group:
-            del info_group["Iteration"]
-        info_group.create_dataset("Iteration", data=iter_value, dtype="int64")
+        datasets: list[tuple[str, float | int, str]] = [
+            ("Time", header.time, "float64"),
+            ("Iteration", header.iteration, "int64"),
+            *((name, value, "float64") for name, value in header.reference_values.items()),
+        ]
+        for name, value, dtype in datasets:
+            # h5py no deja cambiar el tipo de un dataset existente: se borra y se crea de nuevo.
+            if name in info_group:
+                del info_group[name]
+            info_group.create_dataset(name, data=value, dtype=dtype)
 
 
 def _place_file(source: Path, destination: Path, copy: bool) -> None:
@@ -388,9 +470,11 @@ class HorsesDataHandler:
     ) -> None:
         """Convierte los binarios ``.hsol`` a HDF5 (``.h5``/``.hdf``) con ``horses2plt``.
 
-        Antes de crear nada en disco se validan todos los argumentos. Después se ejecuta
-        ``horses2plt``, se escriben (si se pide) el tiempo y la iteración en cada fichero y
-        se colocan los resultados en ``OUT_FILES_DIR``. Solo se tocan los ``.hdf``
+        Antes de crear nada en disco se validan todos los argumentos y, si
+        ``WRITE_SIM_PARAMETER`` es ``True``, las cabeceras de todos los ``.hsol``. Después se
+        ejecuta ``horses2plt`` una sola vez con todos los ``.hsol``, se escriben (si se pide)
+        el tiempo, la iteración y los valores de referencia en cada fichero y se colocan los
+        resultados en ``OUT_FILES_DIR``. Solo se tocan los ``.hdf``
         generados en esta ejecución; otros ``.hdf`` que ya hubiera en ``HSOL_DIR`` se
         dejan donde están.
 
@@ -435,10 +519,14 @@ class HorsesDataHandler:
             Si es ``True``, la librería imprime mensajes de progreso (``>>> ...``). Por
             defecto ``True``.
         WRITE_SIM_PARAMETER : bool, optional
-            Si es ``True``, escribe el tiempo y la iteración de cada solución en
-            ``/VTKHDF/SimulationInfo`` (datasets ``Time``, float64, e ``Iteration``,
-            int64). Ralentiza la conversión unas 4 veces, porque lanza un proceso de
-            ``horses2plt`` por fichero en lugar de uno solo para todos. Por defecto ``True``.
+            Si es ``True``, lee la cabecera binaria de cada ``.hsol`` y escribe en
+            ``/VTKHDF/SimulationInfo`` de su fichero, como datasets escalares: ``Time``
+            (tiempo físico, float64), ``Iteration`` (int64) y los valores de referencia en
+            float64 ``Gamma`` (adimensional), ``GasConstant`` (J/(kg·K)),
+            ``ReferenceVelocity`` (m/s), ``ReferenceDensity`` (kg/m³),
+            ``ReferenceTemperature`` (K) y ``MachNumber`` (adimensional). Los valores se
+            guardan con la precisión completa con que los escribe HORSES3D. Por defecto
+            ``True``.
         EXTENDED_LOG : bool, optional
             Si es ``True``, imprime la salida completa de ``horses2plt``. Por defecto
             ``False``.
@@ -449,7 +537,11 @@ class HorsesDataHandler:
             Si ``OUT_EXTENSION`` no es una de las tres opciones, si ``MESH_DIR`` contiene
             varios ``.hmesh``, si el nombre de algún ``.hsol`` o la ruta que se pasa de la
             malla supera los 132 bytes (antes de crear carpetas o llamar a
-            ``horses2plt``) o si un ``.hdf`` generado no tiene el grupo ``/VTKHDF``.
+            ``horses2plt``), si con ``WRITE_SIM_PARAMETER=True`` la cabecera de algún
+            ``.hsol`` no es válida (fichero de menos de 204 bytes, sin el terminador 88 en el
+            byte 200 o de un tipo que no es de solución, como una malla; también antes de
+            crear carpetas o llamar a ``horses2plt``) o si un ``.hdf`` generado no tiene el
+            grupo ``/VTKHDF``.
         FileNotFoundError
             Si no existe ``SOLVER_PATH``, ``HSOL_DIR``, ``horses2plt`` o la malla, si no hay
             ``.hsol`` o si falta algún ``.hdf`` esperado tras la conversión.
@@ -497,6 +589,13 @@ class HorsesDataHandler:
             _check_path_length(hsol_argument, ".hsol")
         _check_path_length(mesh_argument, ".hmesh")
 
+        # Las cabeceras se leen y validan todas aquí, antes de crear carpetas o llamar a
+        # horses2plt: un .hsol corrupto o una malla entre las soluciones se detecta sin dejar
+        # una conversión a medias. Si no se van a escribir, no hace falta leerlas.
+        headers: list[_HsolHeader] = []
+        if WRITE_SIM_PARAMETER:
+            headers = [_read_hsol_header(hsol) for hsol in hsol_files]
+
         out_dir = hsol_dir if OUT_FILES_DIR is None else Path(OUT_FILES_DIR)
         if OUTPUT_PARAMETERS is None:
             OUTPUT_PARAMETERS = _DEFAULT_OUTPUT_PARAMETERS
@@ -519,39 +618,31 @@ class HorsesDataHandler:
         # recibe solo el nombre, eso es la carpeta de trabajo, HSOL_DIR.
         expected_hdf_files = [hsol.with_suffix(".hdf") for hsol in hsol_files]
 
-        if WRITE_SIM_PARAMETER:
-            # Un proceso por fichero para poder leer el tiempo y la iteración de cada uno.
-            for hsol, hsol_argument, hdf in zip(
-                hsol_files, hsol_arguments, expected_hdf_files, strict=True
-            ):
-                command = [str(horses2plt_path), hsol_argument, mesh_argument, *output_parameters]
-                process = _run_horses2plt(command, hsol_dir, EXTENDED_LOG)
-                # El texto puede salir por cualquiera de los dos canales: se buscan juntos.
-                command_output = f"{process.stdout or ''}\n{process.stderr or ''}"
-                time_value = _get_time(command_output)
-                iter_value = _get_iteration(command_output)
-                if not hdf.is_file():
-                    raise FileNotFoundError(f"horses2plt did not produce the expected file {hdf}")
-                _write_simulation_info(hdf, time_value, iter_value)
-                if LOG:
-                    print(f">>> Converted {hsol.name} at time {time_value}")
-                    print(f">>> Time and iteration written in {hdf.name}")
-        else:
-            # Una sola llamada con todos los `.hsol`; equivale al antiguo `*.hsol` del shell.
-            command = [
-                str(horses2plt_path),
-                *hsol_arguments,
-                mesh_argument,
-                *output_parameters,
-            ]
-            _run_horses2plt(command, hsol_dir, EXTENDED_LOG)
-            if LOG:
-                print(f">>> Converted {len(hsol_files)} .hsol files")
+        # Una sola llamada con todos los `.hsol`; equivale al antiguo `*.hsol` del shell.
+        command = [
+            str(horses2plt_path),
+            *hsol_arguments,
+            mesh_argument,
+            *output_parameters,
+        ]
+        _run_horses2plt(command, hsol_dir, EXTENDED_LOG)
+        if LOG:
+            print(f">>> Converted {len(hsol_files)} .hsol files")
 
         missing = [hdf for hdf in expected_hdf_files if not hdf.is_file()]
         if missing:
             names = ", ".join(str(hdf) for hdf in missing)
             raise FileNotFoundError(f"horses2plt did not produce the expected files: {names}")
+
+        if WRITE_SIM_PARAMETER:
+            # Las tres listas están en el mismo orden: cada .hdf recibe la cabecera de su .hsol.
+            for hsol, hdf, header in zip(hsol_files, expected_hdf_files, headers, strict=True):
+                _write_simulation_info(hdf, header)
+                if LOG:
+                    print(
+                        f">>> {hsol.name}: time {header.time}, iteration {header.iteration} "
+                        f"written in {hdf.name}"
+                    )
 
         ## 4. Colocación de los resultados.
         for hdf in expected_hdf_files:
